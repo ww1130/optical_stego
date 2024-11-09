@@ -88,7 +88,7 @@ class StegoTensorProcessor:
 # 加载数据集
 bs=4
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-epochs=10
+epochs=5
 print_every_batch=32
 generate_secret_every_batch=32
 #dataset = Vimeo90kDataset('data')
@@ -120,23 +120,25 @@ for epoch in range(epochs):
     running_acc = 0.0
     batch_count = 0  # 用于计数当前epoch中的batch数
     
-    secret = torch.randint(0, 2, (bs, 6, 256, 448, 1), device=device).float()
-    secret = secret.permute(0, 1, 4, 2, 3)
-    secret_dwt_tensor=dwt_module(secret)
+    # secret = torch.randint(0, 2, (bs, 6, 256, 448, 1), device=device).float()
+    # secret = secret.permute(0, 1, 4, 2, 3)
+    # secret_dwt_tensor=dwt_module(secret)
     
     #for host, flow_gray in dataloader:
     for batch_idx, (host) in enumerate(dataloader):
         optimizer.zero_grad()
         #secret = torch.randint(0, 2, flow_gray.shape).float()
         b,_,_,_,_=host.shape
-        # if (batch_idx % generate_secret_every_batch == 0):
-        #     bs = host.size(0)  # 获取当前batch的大小
-        #     secret = torch.randint(0, 2, (bs, 6, 256, 448, 1), device=device).float()
-        #     secret = secret.permute(0, 1, 4, 2, 3)
-        #     secret_dwt_tensor = dwt_module(secret)
+        #防止最后一个批次的数据不够bs，导致报错
+        if (batch_idx % generate_secret_every_batch == 0 or b != 32):
+            #bs_last = host.size(0)  # 获取当前batch的大小
+            secret = torch.randint(0, 2, (b, 6, 256, 448, 1), device=device).float()
+            secret = secret.permute(0, 1, 4, 2, 3)
+            secret_dwt_tensor = dwt_module(secret)
 
-        secret_dwt_tensor = secret_dwt_tensor[:b,:,:,:,:,:]
-        secret=secret[:b,:,:,:,:]
+        # secret_dwt_tensor = secret_dwt_tensor[:b,:,:,:,:,:]
+        # secret=secret[:b,:,:,:,:]
+
         #print(flow_gray.shape)
         #secret = torch.randint(0, 2, host.shape).float() 
 
@@ -269,8 +271,8 @@ for epoch in range(epochs):
         correct_count = correct_bits.sum().item()
         acc = correct_count / (256*448*6*b)
 
-        del rs_sig, num05, correct_bits
-        torch.cuda.empty_cache()
+        # del rs_sig, num05, correct_bits
+        # torch.cuda.empty_cache()
 
         # 根据MSE值动态调整损失函数
         if mse.item() < encoder_mse_threshold_low:
