@@ -1,7 +1,7 @@
 import os
 import numpy as np
 import cv2
-import pywt
+#import pywt
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -9,80 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 import models
 import utils
-
-
-# 1. 数据集加载
-
-class Vimeo90kDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.transform = transform
-        # 遍历两层目录
-        self.sequences = []
-        for subdir in os.listdir(root_dir):
-
-            subdir_path = os.path.join(root_dir, subdir)
-            if os.path.isdir(subdir_path):
-                for nested_subdir in os.listdir(subdir_path):
-                    nested_subdir_path = os.path.join(subdir_path, nested_subdir)
-                    if os.path.isdir(nested_subdir_path):
-                        self.sequences.append(nested_subdir_path)
-
-    def __len__(self):
-        return len(self.sequences)
-
-    def __getitem__(self, idx):
-        sequence_path = self.sequences[idx]
-        images = []
-
-        # 加载7张连续的图片
-        for i in range(1, 8):
-            img_path = os.path.join(sequence_path, f'im{i}.png')
-            if os.path.exists(img_path):
-                img = cv2.imread(img_path)
-
-                if img is not None:
-                    images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                else:
-                    raise FileNotFoundError(f"Image {img_path} cannot be read.")
-            else:
-                raise FileNotFoundError(f"Image {img_path} does not exist.")
-        
-        # #加载光流灰度图
-        # flow_gray_path = os.path.join(sequence_path, f'flow_im1_im2_gray.png') 
-        # if os.path.exists(flow_gray_path):
-        #     flow_gray = cv2.imread(flow_gray_path, cv2.IMREAD_GRAYSCALE)
-
-        #     if flow_gray is None:
-        #         raise FileNotFoundError(f"Flow gray image {flow_gray_path} cannot be read.")
-        # else:
-        #     raise FileNotFoundError(f"Flow gray image {flow_gray_path} does not exist.")
-        
-        # #转换为 tensor 格式
-        # images = np.stack(images, axis=0)  # (7, H, W, C)
-        # flow_gray = np.expand_dims(flow_gray, axis=0)  # (1, H, W)
-
-        # return torch.FloatTensor(images), torch.FloatTensor(flow_gray)
-        
-        #my fixs
-        flow_grays=[]
-        for i in range(1,7):
-            flow_gray_path = os.path.join(sequence_path, f'flow_im{i}_im{i+1}_gray.png') 
-            if os.path.exists(flow_gray_path):
-                flow_gray = cv2.imread(flow_gray_path, cv2.IMREAD_GRAYSCALE)
-
-                if flow_gray is not None:
-                    flow_grays.append(flow_gray)
-            else:
-                raise FileNotFoundError(f"Flow gray image {flow_gray_path} does not exist.")
-        
-        # 转换为 tensor 格式
-        images = np.stack(images, axis=0)  # (7, H, W, C)
-
-        flow_grays = np.stack(flow_grays, axis=0)
-        flow_grays = np.expand_dims(flow_grays, axis=-1)  # (6, H, W, 1)
-        
-        return torch.FloatTensor(images), torch.FloatTensor(flow_grays)
+from dataset import Vimeo90kDatasettxt
 
 # 4. 融合与逆 DWT
 def steganography(host_dwt, secret_dwt, lambda_factor=0.1):
@@ -158,61 +85,56 @@ class StegoTensorProcessor:
 
         return result_list
 
-# class StegoLoss(nn.Module):
-#     def __init__(self):
-#         super(StegoLoss, self).__init__()
-#
-#     def forward(self, originalHavefirstframe, stego, extracted_secret, original_secret):
-#         original =originalHavefirstframe[:,1:,:,:,:]
-#         psnr_loss = torch.mean((original - stego) ** 2)
-#
-#         # 计算比特准确率
-#         correct_bits = (extracted_secret == original_secret).float().sum()
-#         total_bits = original_secret.numel()  # numel() 返回张量的元素总数
-#         bitwise_accuracy = correct_bits / total_bits
-#         # 如果您想要将比特准确率也作为一个损失返回，可以如下操作：
-#         bitwise_loss = 1 - bitwise_accuracy  # 这会将准确率转换为损失
-#
-#         # bitwise_loss = torch.mean((extracted_secret - original_secret) ** 2)
-#
-#         return psnr_loss , bitwise_loss
-
-
 # 加载数据集
-bs=32
+bs=4
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 epochs=10
-dataset = Vimeo90kDataset('data')
+print_every_batch=32
+generate_secret_every_batch=32
+#dataset = Vimeo90kDataset('data')
+dataset = Vimeo90kDatasettxt(root_dir='/home/admin/workspace/vimeo_septuplet')
 dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
 # 训练过程
-encoder= models.DenseEncoder()
-decoder= models.DenseDecoder()
+encoder= models.DenseEncoder().cuda()
+decoder= models.DenseDecoder().cuda()
 optimizer = torch.optim.Adam(
     list(encoder.parameters()) + list(decoder.parameters()),
     lr=1e-4
 )
-criterion = models.StegoLoss()
+criterion = models.StegoLoss().cuda()
+#os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:4096'
 
-encoder_mse_threshold_low = 1  # 当 MSE 小于此值时，冻结 encoder
-encoder_mse_threshold_high = 2 # 当 MSE 大于此值时，重新开启 encoder 的优化
-encoder_frozen = False
+encoder_mse_threshold_low = 5  # 当 MSE 小于此值时，loss=fnbit
+encoder_mse_threshold_high = 6 # 当 MSE 大于此值时，loss=mse+fnbit
 
-loss_fn = nn.BCEWithLogitsLoss()
+loss_fn = nn.BCEWithLogitsLoss().cuda()
 
 dwt_module = utils.DWT().cuda()
 iwt_module = utils.IWT().cuda()
 
 
 for epoch in range(epochs):
-    #print("test "  ,epoch)
-    secret = torch.randint(0, 2, (bs,6,256,448,1)).float()
+    running_loss = 0.0
+    running_mse = 0.0
+    running_fnbit = 0.0
+    running_acc = 0.0
+    batch_count = 0  # 用于计数当前epoch中的batch数
+    
+    secret = torch.randint(0, 2, (bs, 6, 256, 448, 1), device=device).float()
     secret = secret.permute(0, 1, 4, 2, 3)
-    #secret_dwt = utils.dwt_transform(secret)  # (B,T,C,4,H/2,W/2)
-    #secret_dwt_tensor = convert_to_tensor(secret_dwt)
     secret_dwt_tensor=dwt_module(secret)
-    #secret_dwt_tensor=secret_dwt_tensor.unsqueeze(2)
-    for host, flow_gray in dataloader:
+    
+    #for host, flow_gray in dataloader:
+    for batch_idx, (host) in enumerate(dataloader):
+        optimizer.zero_grad()
         #secret = torch.randint(0, 2, flow_gray.shape).float()
-        b,_,_,_,_=flow_gray.shape
+        b,_,_,_,_=host.shape
+        # if (batch_idx % generate_secret_every_batch == 0):
+        #     bs = host.size(0)  # 获取当前batch的大小
+        #     secret = torch.randint(0, 2, (bs, 6, 256, 448, 1), device=device).float()
+        #     secret = secret.permute(0, 1, 4, 2, 3)
+        #     secret_dwt_tensor = dwt_module(secret)
+
         secret_dwt_tensor = secret_dwt_tensor[:b,:,:,:,:,:]
         secret=secret[:b,:,:,:,:]
         #print(flow_gray.shape)
@@ -221,7 +143,7 @@ for epoch in range(epochs):
         host = host.permute(0, 1, 4, 2, 3)
         #host01=host[:,1:,:,:,:]
         # secret=secret.permute(0, 1, 4, 2, 3)
-        flow_gray=flow_gray.permute(0, 1, 4, 2, 3)
+        #flow_gray=flow_gray.permute(0, 1, 4, 2, 3)
 
         #host_dwt = utils.dwt_transform(host)
         # secret_dwt = utils.dwt_transform(secret) #(B,T,C,4,H/2,W/2)
@@ -317,14 +239,6 @@ for epoch in range(epochs):
         # noisy_stego_image_tensor = torch.tensor(noisy_stego_image, dtype=torch.float32, requires_grad=True)
         # noisy_stego_image_tensor = noisy_stego_image_tensor.permute(0, 1, 4, 2, 3)
 
-        #optimizer.zero_grad()
-
-        # TOO:写decoder提取secret，decoder的输入是  stego_ll,stego_lh,stego_hl,stego_hh，输出是  hll,hlh,hhl,hhh  ,  sll,slh,shl,shh
-        # hll,hlh ,hhl,hhh转换为extract_host     sll,slh,shl,shh转换为extract_secret
-        #rhll,rhlh,rhhl,rhhh,rsll,rslh,rshl,rshh=decoder(stego_ll,stego_lh,stego_hl,stego_hh)
-
-
-
         #rs_dwt = decoder(stego_dwt_tensor)
         rs = decoder(stego_image)
 
@@ -332,7 +246,6 @@ for epoch in range(epochs):
         #rs_list = StegoTensorProcessor(rs_dwt).process()
         #rs= utils.dwt_inverse(rs_list)
         #rs= iwt_module(rs_dwt)
-
 
         rs_sig=torch.sigmoid(rs)
 
@@ -356,28 +269,27 @@ for epoch in range(epochs):
         correct_count = correct_bits.sum().item()
         acc = correct_count / (256*448*6*b)
 
+        del rs_sig, num05, correct_bits
+        torch.cuda.empty_cache()
 
         # 根据MSE值动态调整损失函数
         if mse.item() < encoder_mse_threshold_low:
             # MSE已经足够低,转向优化信息提取的效果
-            print(f"Epoch {epoch+1}: MSE is good ({mse.item():.4f}), focusing on extraction quality")
-            loss = 5 * fnbit  # 只关注提取质量
+            #print(f"Epoch {epoch+1}: MSE is good ({mse.item():.4f}), focusing on extraction quality")
+            loss =  fnbit  # 只关注提取质量
 
         elif mse.item() > encoder_mse_threshold_high:
             # MSE过高,需要同时关注图像质量和提取效果
-            print(f"Epoch {epoch+1}: MSE is high ({mse.item():.4f}), balancing image quality and extraction")
-            loss = mse + 5 * fnbit  # 平衡图像质量和提取效果
+            #print(f"Epoch {epoch+1}: MSE is high ({mse.item():.4f}), balancing image quality and extraction")
+            loss = mse +  fnbit  # 平衡图像质量和提取效果
 
         else:
             # MSE在可接受范围内,使用正常的损失计算
-            loss =   5 * fnbit  # 可以适当降低MSE的权重
+            loss =  fnbit  # 可以适当降低MSE的权重
 
 
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
-
 
         # before_update = {name: param.data.clone() for name, param in decoder.named_parameters()}
         # optimizer.step()
@@ -392,10 +304,36 @@ for epoch in range(epochs):
         #     else:
         #         print(f"{name} gradient: None")
 
-        print(f'Epoch {epoch + 1}, Loss: {loss.item()}, mse: {mse},fnbit:{fnbit},acc:{acc}')
+        running_loss += loss.item()
+        running_mse += mse
+        running_fnbit += fnbit
+        running_acc += acc
+        batch_count += 1
+
+        # 每32个batch打印一次
+        if (batch_idx + 1) % print_every_batch == 0:
+            avg_loss = running_loss / batch_count
+            avg_mse = running_mse / batch_count
+            avg_fnbit = running_fnbit / batch_count
+            avg_acc = running_acc / batch_count
+            
+            print(f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f}, FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}')
+
+            # 释放不必要的内存
+            # del host, encoded_images, decoded_secret, secret, secret_dwt_tensor
+            # torch.cuda.empty_cache()
+            
+            # 重置累积值
+            running_loss = 0.0
+            running_mse = 0.0
+            running_fnbit = 0.0
+            running_acc = 0.0
+            batch_count = 0
+
+        #print(f'Epoch {epoch + 1}, Loss: {loss.item()}, mse: {mse},fnbit:{fnbit},acc:{acc}')
         
 
-save_dir = './saved_models/'
+save_dir = './saved_models_whole_data/'
 os.makedirs(save_dir, exist_ok=True)
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')

@@ -1,7 +1,7 @@
 import os
 import numpy as np
-import cv2
-import pywt
+#import cv2
+#import pywt
 import torch
 import torch.nn as nn
 import torch.optim as optim

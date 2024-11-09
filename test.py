@@ -1,6 +1,6 @@
 import torch
 import os
-from models import Encoder, Decoder,StegoLoss,StegoLosstest
+from models import DenseEncoder, DenseDecoder,StegoLoss,StegoLosstest
 from utils import dwt_transform, dwt_inverse,convert_to_tensor,StegoTensorProcessor
 from dataset import Vimeo90kDataset
 from torch.utils.data import DataLoader
@@ -22,8 +22,8 @@ save_dir = './saved_models/'
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
 
-encoder = Encoder()
-decoder = Decoder()
+encoder = DenseEncoder()
+decoder = DenseDecoder()
 
 # 加载模型权重
 encoder.load_state_dict(torch.load(encoder_save_path))
@@ -98,13 +98,13 @@ with torch.no_grad():
         # noisy_stego_image_tensor = torch.tensor(noisy_stego_image, dtype=torch.float32, requires_grad=True)
         # noisy_stego_image_tensor = noisy_stego_image_tensor.permute(0, 1, 4, 2, 3)
 
-        rs_dwt = decoder(stego_dwt_tensor)
+        rs = decoder(stego_image)
 
-        rs = iwt_module(rs_dwt)
+        #rs = iwt_module(rs_dwt)
         rs_sig = torch.sigmoid(rs)
         msebit = loss_fn(rs, secret)
         #rs_binary = (rs_binary > 0.7).float()
-        num05=(rs_sig < 0.5).float()
+        num05=(rs_sig > 0.5).float()
 
         # num_secret_than0=(secret>0).sum().item()
         # num_greater_than_0 = (rs_sig > 0).sum().item()
