@@ -87,43 +87,43 @@ class Vimeo90kDatasettxt(Dataset):
         self.transform = transform
         self.sequences = self.load_sequences()
 
-    # def load_sequences(self):
-    #     sequences = []
-    #     train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
-    #     sequences_dir = os.path.join(self.root_dir, 'sequences')
-        
-    #     with open(train_list_path, 'r') as f:
-    #         lines = f.readlines()
-    #         for line in lines:
-    #             line = line.strip()
-    #             if line:
-    #                 sequence_path = os.path.join(sequences_dir, line)
-    #                 sequences.append(sequence_path)
-    #     return sequences
-
-    def load_sequences(self, fraction=0.1):
+    def load_sequences(self):
         sequences = []
         train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
         sequences_dir = os.path.join(self.root_dir, 'sequences')
         
         with open(train_list_path, 'r') as f:
             lines = f.readlines()
-            # 去除空白行
-            lines = [line.strip() for line in lines if line.strip()]
-            # 计算要选择的行数
-            num_lines_to_select = int(len(lines) * fraction)
-            # 确保选择的行数不超过总行数
-            if num_lines_to_select > len(lines):
-                num_lines_to_select = len(lines)
-            # 随机选择起始点
-            start_index = random.randint(0, len(lines) - num_lines_to_select)
-            # 从起始点开始选择连续的行
-            selected_lines = lines[start_index:start_index + num_lines_to_select]
-            for line in selected_lines:
-                sequence_path = os.path.join(sequences_dir, line)
-                sequences.append(sequence_path)
-        
+            for line in lines:
+                line = line.strip()
+                if line:
+                    sequence_path = os.path.join(sequences_dir, line)
+                    sequences.append(sequence_path)
         return sequences
+
+    # def load_sequences(self, fraction=0.1):
+    #     sequences = []
+    #     train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
+    #     sequences_dir = os.path.join(self.root_dir, 'sequences')
+        
+    #     with open(train_list_path, 'r') as f:
+    #         lines = f.readlines()
+    #         # 去除空白行
+    #         lines = [line.strip() for line in lines if line.strip()]
+    #         # 计算要选择的行数
+    #         num_lines_to_select = int(len(lines) * fraction)
+    #         # 确保选择的行数不超过总行数
+    #         if num_lines_to_select > len(lines):
+    #             num_lines_to_select = len(lines)
+    #         # 随机选择起始点
+    #         start_index = random.randint(0, len(lines) - num_lines_to_select)
+    #         # 从起始点开始选择连续的行
+    #         selected_lines = lines[start_index:start_index + num_lines_to_select]
+    #         for line in selected_lines:
+    #             sequence_path = os.path.join(sequences_dir, line)
+    #             sequences.append(sequence_path)
+        
+    #     return sequences
 
     def __len__(self):
         return len(self.sequences)

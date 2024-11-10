@@ -18,7 +18,7 @@ dataset = Vimeo90kDataset('data')
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
 # 加载保存的模型
-save_dir = './saved_models/'
+save_dir = './saved_models_whole_data/'
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
 

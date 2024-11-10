@@ -86,7 +86,8 @@ def process_sequence(model, sequence_dir, device):
 def main(args):
     # 初始化模型
     model = init_model(args.config, args.checkpoint, device=args.device)
-    data_dir = 'data'
+    #data_dir = 'data'
+    data_dir = '/home/admin/workspace/vimeo_septuplet/sequences'
 
     # 遍历 vimeo90k 的文件结构
     for root, dirs, files in os.walk(data_dir):

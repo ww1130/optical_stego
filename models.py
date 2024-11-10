@@ -141,27 +141,53 @@ class DenseEncoder(nn.Module):
         # Initialize the layers for the encoder with concatenated channel and frequency dimensions
         in_channels = 3 * (4-1)  # Assuming input channels and DCT dimension are combined
 
-        self.conv1 = nn.Sequential(
+        self.features = nn.Sequential(
             self._conv3d(in_channels, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
-        self.conv2 = nn.Sequential(
+
+        self.conv1 = nn.Sequential(
             self._conv3d(self.hidden_size + self.data_depth * 4, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
+        self.conv2 = nn.Sequential(
+            self._conv3d(self.hidden_size*2 + self.data_depth * 4, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm3d(self.hidden_size),
+        )
         self.conv3 = nn.Sequential(
-            self._conv3d(self.hidden_size * 2 + self.data_depth * 4, self.hidden_size),
+            self._conv3d(self.hidden_size * 3 + self.data_depth * 4, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
         self.conv4 = nn.Sequential(
-            self._conv3d(self.hidden_size * 3 + self.data_depth * 4, in_channels)
+            self._conv3d(self.hidden_size * 4 + self.data_depth * 4, in_channels)
         )
 
+        # self.conv1 = nn.Sequential(
+        #     self._conv3d(in_channels, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv2 = nn.Sequential(
+        #     self._conv3d(self.hidden_size + self.data_depth * 4, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv3 = nn.Sequential(
+        #     self._conv3d(self.hidden_size * 2 + self.data_depth * 4, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv4 = nn.Sequential(
+        #     self._conv3d(self.hidden_size * 3 + self.data_depth * 4, in_channels)
+        # )
+
         # Store the convolutional layers in a list
-        self._models = [self.conv1, self.conv2, self.conv3, self.conv4]
+        #self._models = [self.conv1, self.conv2, self.conv3, self.conv4]
+        self._models = [self.features,self.conv1, self.conv2, self.conv3, self.conv4]
 
     def forward(self, video, secret):
         """
@@ -192,7 +218,7 @@ class DenseEncoder(nn.Module):
             x = layer(torch.cat(x_list + [secret], dim=1))
             x_list.append(x)
 
-        high_band = high_band + 2*x
+        high_band = high_band + x
 
         high_band = high_band.permute(0, 2, 1, 3, 4).reshape(b, t-1, c, 3, h, w)
         stego_video = torch.cat((low_band, high_band), dim=3)
