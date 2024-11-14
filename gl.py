@@ -88,7 +88,7 @@ class StegoTensorProcessor:
 # 加载数据集
 bs=4
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-epochs=2
+epochs=1
 print_every_batch=32
 generate_secret_every_batch=32
 #dataset = Vimeo90kDataset('data')
@@ -283,15 +283,15 @@ for epoch in range(epochs):
         elif mse.item() > encoder_mse_threshold_high:
             # MSE过高,需要同时关注图像质量和提取效果
             #print(f"Epoch {epoch+1}: MSE is high ({mse.item():.4f}), balancing image quality and extraction")
-            #loss = mse +  10*fnbit  # 平衡图像质量和提取效果
-            mse_weight = 1.0 / (mse + 1e-8)  # 防止除以零
-            fnbit_weight = 1.0 / (fnbit + 1e-8)  # 防止除以零
+            loss = mse +  10*fnbit  # 平衡图像质量和提取效果
+            # mse_weight = 1.0 / (mse.item() + 1e-8)  # 防止除以零
+            # fnbit_weight = 1.0 / (fnbit.item() + 1e-8)  # 防止除以零
         
-            total_weight = mse_weight + fnbit_weight
-            mse_weight /= total_weight
-            fnbit_weight /= total_weight
+            # total_weight = mse_weight + fnbit_weight
+            # mse_weight /= total_weight
+            # fnbit_weight /= total_weight
         
-            loss = mse * mse_weight + fnbit * fnbit_weight
+            # loss = mse * mse_weight + fnbit * fnbit_weight  
 
         else:
             # MSE在可接受范围内,使用正常的损失计算
@@ -343,7 +343,7 @@ for epoch in range(epochs):
         #print(f'Epoch {epoch + 1}, Loss: {loss.item()}, mse: {mse},fnbit:{fnbit},acc:{acc}')
         
 
-save_dir = './model_imporedEn_DenseDe_1002/'
+save_dir = './model_imporedEn_DenseDe_1001/'
 os.makedirs(save_dir, exist_ok=True)
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')

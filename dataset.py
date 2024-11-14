@@ -81,76 +81,76 @@ class Vimeo90kDataset(Dataset):
 
         return torch.FloatTensor(images), torch.FloatTensor(flow_grays)
 
-class Vimeo90kDatasettxt(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
-        self.transform = transform
-        self.sequences = self.load_sequences()
+# class Vimeo90kDatasettxt(Dataset):
+#     def __init__(self, root_dir, transform=None):
+#         self.root_dir = root_dir
+#         self.transform = transform
+#         self.sequences = self.load_sequences()
 
-    def load_sequences(self):
-        sequences = []
-        train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
-        sequences_dir = os.path.join(self.root_dir, 'sequences')
+#     def load_sequences(self):
+#         sequences = []
+#         train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
+#         sequences_dir = os.path.join(self.root_dir, 'sequences')
         
-        with open(train_list_path, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                line = line.strip()
-                if line:
-                    sequence_path = os.path.join(sequences_dir, line)
-                    sequences.append(sequence_path)
-        return sequences
+#         with open(train_list_path, 'r') as f:
+#             lines = f.readlines()
+#             for line in lines:
+#                 line = line.strip()
+#                 if line:
+#                     sequence_path = os.path.join(sequences_dir, line)
+#                     sequences.append(sequence_path)
+#         return sequences
 
-    # def load_sequences(self, fraction=0.1):
-    #     sequences = []
-    #     train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
-    #     sequences_dir = os.path.join(self.root_dir, 'sequences')
+#     # def load_sequences(self, fraction=0.1):
+#     #     sequences = []
+#     #     train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
+#     #     sequences_dir = os.path.join(self.root_dir, 'sequences')
         
-    #     with open(train_list_path, 'r') as f:
-    #         lines = f.readlines()
-    #         # 去除空白行
-    #         lines = [line.strip() for line in lines if line.strip()]
-    #         # 计算要选择的行数
-    #         num_lines_to_select = int(len(lines) * fraction)
-    #         # 确保选择的行数不超过总行数
-    #         if num_lines_to_select > len(lines):
-    #             num_lines_to_select = len(lines)
-    #         # 随机选择起始点
-    #         start_index = random.randint(0, len(lines) - num_lines_to_select)
-    #         # 从起始点开始选择连续的行
-    #         selected_lines = lines[start_index:start_index + num_lines_to_select]
-    #         for line in selected_lines:
-    #             sequence_path = os.path.join(sequences_dir, line)
-    #             sequences.append(sequence_path)
+#     #     with open(train_list_path, 'r') as f:
+#     #         lines = f.readlines()
+#     #         # 去除空白行
+#     #         lines = [line.strip() for line in lines if line.strip()]
+#     #         # 计算要选择的行数
+#     #         num_lines_to_select = int(len(lines) * fraction)
+#     #         # 确保选择的行数不超过总行数
+#     #         if num_lines_to_select > len(lines):
+#     #             num_lines_to_select = len(lines)
+#     #         # 随机选择起始点
+#     #         start_index = random.randint(0, len(lines) - num_lines_to_select)
+#     #         # 从起始点开始选择连续的行
+#     #         selected_lines = lines[start_index:start_index + num_lines_to_select]
+#     #         for line in selected_lines:
+#     #             sequence_path = os.path.join(sequences_dir, line)
+#     #             sequences.append(sequence_path)
         
-    #     return sequences
+#     #     return sequences
 
-    def __len__(self):
-        return len(self.sequences)
+#     def __len__(self):
+#         return len(self.sequences)
 
-    def __getitem__(self, idx):
-        sequence_path = self.sequences[idx]
-        images = []
+#     def __getitem__(self, idx):
+#         sequence_path = self.sequences[idx]
+#         images = []
 
-        # 加载7张连续的图片
-        for i in range(1, 8):
-            img_path = os.path.join(sequence_path, f'im{i}.png')
-            if os.path.exists(img_path):
-                img = cv2.imread(img_path)
-                if img is not None:
-                    images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-                else:
-                    raise FileNotFoundError(f"Image {img_path} cannot be read.")
-            else:
-                raise FileNotFoundError(f"Image {img_path} does not exist.")
+#         # 加载7张连续的图片
+#         for i in range(1, 8):
+#             img_path = os.path.join(sequence_path, f'im{i}.png')
+#             if os.path.exists(img_path):
+#                 img = cv2.imread(img_path)
+#                 if img is not None:
+#                     images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+#                 else:
+#                     raise FileNotFoundError(f"Image {img_path} cannot be read.")
+#             else:
+#                 raise FileNotFoundError(f"Image {img_path} does not exist.")
         
-        # 转换为 tensor 格式
-        images = np.stack(images, axis=0)  # (7, H, W, C)
+#         # 转换为 tensor 格式
+#         images = np.stack(images, axis=0)  # (7, H, W, C)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        images_tensor = torch.FloatTensor(images).to(device)
+#         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#         images_tensor = torch.FloatTensor(images).to(device)
         
-        return images_tensor
+#         return images_tensor
 
 
 # class Vimeo90kDatasettxt(Dataset):
@@ -213,3 +213,63 @@ class Vimeo90kDatasettxt(Dataset):
 #         flow_grays_tensor = torch.FloatTensor(flow_grays).to(device)
         
 #         return images_tensor, flow_grays_tensor
+class Vimeo90kDatasettxtNoisy(Dataset):
+    def __init__(self, root_dir, transform=None):
+        self.root_dir = root_dir
+        self.transform = transform
+        self.sequences = self.load_sequences()
+
+    def load_sequences(self):
+        sequences = []
+        train_list_path = os.path.join(self.root_dir, 'sep_trainlist.txt')
+        sequences_dir = os.path.join(self.root_dir, 'sequences')
+        
+        with open(train_list_path, 'r') as f:
+            lines = f.readlines()
+            for line in lines:
+                line = line.strip()
+                if line:
+                    sequence_path = os.path.join(sequences_dir, line)
+                    sequences.append(sequence_path)
+        return sequences
+
+    def __len__(self):
+        return len(self.sequences)
+
+    def __getitem__(self, idx):
+        sequence_path = self.sequences[idx]
+        images = []
+
+        # 加载IM2,IM3,IM4
+        for i in range(2, 5):
+            img_path = os.path.join(sequence_path, f'im{i}.png')
+            if os.path.exists(img_path):
+                img = cv2.imread(img_path)
+                if img is not None:
+                    images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                else:
+                    raise FileNotFoundError(f"Image {img_path} cannot be read.")
+            else:
+                raise FileNotFoundError(f"Image {img_path} does not exist.")
+        
+        # 加载光流灰度图FLOW2,3,4
+        flow_grays = []
+        for i in range(2, 5):
+            flow_gray_path = os.path.join(sequence_path, f'flow_im{i}_im{i+1}_gray.png') 
+            if os.path.exists(flow_gray_path):
+                flow_gray = cv2.imread(flow_gray_path, cv2.IMREAD_GRAYSCALE)
+                if flow_gray is not None:
+                    flow_grays.append(flow_gray)
+            else:
+                raise FileNotFoundError(f"Flow gray image {flow_gray_path} does not exist.")
+        
+        # 转换为 tensor 格式
+        images = np.stack(images, axis=0)  # (3, H, W, C)
+        flow_grays = np.stack(flow_grays, axis=0)  # (3, H, W)
+        flow_grays = np.expand_dims(flow_grays, axis=-1)  # (6, H, W, 1)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        images_tensor = torch.FloatTensor(images).to(device)
+        flow_grays_tensor = torch.FloatTensor(flow_grays).to(device)
+        
+        return images_tensor, flow_grays_tensor

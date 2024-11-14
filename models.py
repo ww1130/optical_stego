@@ -226,6 +226,116 @@ class DenseEncoder(nn.Module):
         # Reshape back to the original dimensions (B, T, C, 4, H/2, W/2)
         return stego_video
 
+class DenseEncoderNoisy(nn.Module):
+    """
+    The DenseEncoder3D module takes a cover video tensor and a data tensor,
+    and combines them into a steganographic video.
+    Input: cover (B, T, C, 4, H/2, W/2), secret (B, T, 1, 4, H/2, W/2)
+    Output: steganographic video (B, T, C, 4, H/2, W/2)
+    """
+    def __init__(self, data_depth=1, hidden_size=64):
+        super(DenseEncoderNoisy, self).__init__()
+        self.data_depth = data_depth
+        self.hidden_size = hidden_size
+        self._build_models()
+    def _conv3d(self, in_channels, out_channels):
+        return nn.Conv3d(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=3,
+            padding=1
+        )
+
+    def _build_models(self):
+        # Initialize the layers for the encoder with concatenated channel and frequency dimensions
+        in_channels = 3 * (4-1)  # 三个色彩通道乘以三个高频带，Assuming input channels and DCT dimension are combined
+
+        self.features = nn.Sequential(
+            self._conv3d(in_channels, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm3d(self.hidden_size),
+        )
+
+        self.conv1 = nn.Sequential(
+            self._conv3d(self.hidden_size + self.data_depth * 4, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm3d(self.hidden_size),
+        )
+        self.conv2 = nn.Sequential(
+            self._conv3d(self.hidden_size*2 + self.data_depth * 4, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm3d(self.hidden_size),
+        )
+        self.conv3 = nn.Sequential(
+            self._conv3d(self.hidden_size * 3 + self.data_depth * 4, self.hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.BatchNorm3d(self.hidden_size),
+        )
+        self.conv4 = nn.Sequential(
+            self._conv3d(self.hidden_size * 4 + self.data_depth * 4, in_channels)
+        )
+
+        # self.conv1 = nn.Sequential(
+        #     self._conv3d(in_channels, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv2 = nn.Sequential(
+        #     self._conv3d(self.hidden_size + self.data_depth * 4, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv3 = nn.Sequential(
+        #     self._conv3d(self.hidden_size * 2 + self.data_depth * 4, self.hidden_size),
+        #     nn.LeakyReLU(inplace=True),
+        #     nn.BatchNorm3d(self.hidden_size),
+        # )
+        # self.conv4 = nn.Sequential(
+        #     self._conv3d(self.hidden_size * 3 + self.data_depth * 4, in_channels)
+        # )
+
+        # Store the convolutional layers in a list
+        #self._models = [self.conv1, self.conv2, self.conv3, self.conv4]
+        self._models = [self.features,self.conv1, self.conv2, self.conv3, self.conv4]
+
+    def forward(self, video, secret):
+        """
+        Forward pass for DenseEncoder3D.
+        Input:
+            video: (B, T, C, 4, H/2, W/2)
+            secret: (B, T, 1, 4, H/2, W/2)
+        Output:
+            steganographic video: (B, T, C, 4, H/2, W/2)
+        """
+        # Combine C and 4 dimensions by reshaping
+        b, t, c, d, h, w = video.size()
+        #video = video[:,1 :, :, :, :,:]
+        high_band = video[:, :, :, 1:, :, :]
+        low_band = video[:, :, :, :1, :, :]
+        high_band = high_band.reshape(b, t, c * 3, h, w)
+        high_band = high_band.permute(0, 2, 1, 3, 4)
+
+        secret = secret.reshape(b, t , self.data_depth * 4, h, w)
+        secret = secret.permute(0, 2, 1, 3, 4)
+
+        # Apply the first convolutional layer
+        x = self._models[0](high_band)
+        x_list = [x]
+
+        # Loop over the remaining layers and concatenate `secret` to each layer
+        for layer in self._models[1:]:
+            x = layer(torch.cat(x_list + [secret], dim=1))
+            x_list.append(x)
+
+        high_band = high_band + x
+
+        high_band = high_band.permute(0, 2, 1, 3, 4).reshape(b, t, c, 3, h, w)
+        stego_video = torch.cat((low_band, high_band), dim=3)
+
+        # Reshape back to the original dimensions (B, T, C, 4, H/2, W/2)
+        return stego_video
+
+
 # class Decoder(nn.Module):
 #     def __init__(self, host_channels=3, secret_channels=1, embed_channels=64):
 #         super(Decoder, self).__init__()

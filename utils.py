@@ -1,13 +1,14 @@
 import os
 import numpy as np
-#import cv2
+import cv2
 #import pywt
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
-from PIL import Image,ImageDraw
+from PIL import Image,ImageDraw,ImageFont
 import models
+import torch.nn.functional as F
 
 def dwt_transform(tensor):
     # 输入 tensor 形状为 (B, T, C, H, W)
@@ -207,38 +208,89 @@ def add_noise(image, flow_gray):
     #return noisy_image
 
 
-def add_noise_based_on_variance(stego_image, flow_gray, block_size=(8, 8), max_noise=0.1):
-    B, T, C, H, W = stego_image.shape  # 正确读取尺寸
-    noise_image = stego_image.clone()  # 复制隐写图像以添加噪声
-
-    flow_gray_reshaped = flow_gray.view(B * T, 1, H, W)
-
-    for b in range(B):
-        for t in range(T):
-            flow_gray_current = flow_gray_reshaped[b * T + t]
-
-            # 将当前帧的灰度图转换为PIL图像以便绘制
-            flow_gray_pil = Image.fromarray((flow_gray_current.squeeze().cpu().numpy() * 255).astype('uint8'), 'L')
-            draw = ImageDraw.Draw(flow_gray_pil)
-
-            # 分块处理
-            for h in range(0, H, block_size[0]):
-                for w in range(0, W, block_size[1]):
-                    block = flow_gray_current[:, h:h + block_size[0], w:w + block_size[1]]
-                    variance = torch.var(block)
-
-                    # 根据方差生成噪声
-                    noise_level = max_noise * variance.item()
-                    noise = torch.randn(C, block_size[0], block_size[1], device=stego_image.device) * noise_level
-
-                    # 将噪声添加到隐写图像中
-                    noise_image[b, t, :, h:h + block_size[0], w:w + block_size[1]] += noise
-
-                    # 绘制分块边界
-                    draw.rectangle([w, h, w + block_size[1], h + block_size[0]], outline='red', width=1)
-
-            # 保存带有划分线的灰度图
-            #filename = f'block_divided_flow_gray_{b}_{t}.png'
-            #flow_gray_pil.save(filename)
-
-    return noise_image
+def add_noise_based_on_variance(stego_image, flow_gray):
+    b, t, c, h, w = stego_image.shape
+    
+    # 确保flow_gray的shape正确
+    assert flow_gray.shape == (b, t, 1, h, w), "Flow gray shape mismatch"
+    
+    noisy_stego_image = stego_image.clone()
+    
+    for batch in range(b):
+        for time in range(t):
+            # 对每个时间步进行处理
+            current_flow = flow_gray[batch, time, 0]
+            current_stego = stego_image[batch, time]
+            
+            # 自适应分块
+            for block_size in [32, 16, 8]:
+                # 计算需要的padding
+                pad_h = (block_size - h % block_size) % block_size
+                pad_w = (block_size - w % block_size) % block_size
+                
+                # 对flow和stego进行padding
+                padded_flow = F.pad(current_flow, (0, pad_w, 0, pad_h))
+                padded_stego = F.pad(current_stego, (0, pad_w, 0, pad_h))
+                
+                # 使用unfold进行分块
+                flow_blocks = F.unfold(padded_flow.unsqueeze(0).unsqueeze(0), kernel_size=block_size, stride=block_size)
+                flow_blocks = flow_blocks.view(1, block_size, block_size, -1).permute(0, 3, 1, 2)
+                
+                # 计算每个块的方差
+                variances = torch.var(flow_blocks, dim=(2, 3))
+                
+                # 对stego image进行分块
+                stego_blocks = F.unfold(padded_stego.unsqueeze(0), kernel_size=block_size, stride=block_size)
+                stego_blocks = stego_blocks.view(c, block_size, block_size, -1).permute(0, 3, 1, 2)
+                
+                # 为每个通道生成噪声
+                noise = torch.randn_like(stego_blocks) * variances.view(1, -1, 1, 1).sqrt()
+                
+                # 将噪声加到对应的stego image块上
+                noisy_blocks = stego_blocks + noise
+                
+                # 将处理后的块放回原图
+                noisy_blocks = noisy_blocks.permute(0, 2, 3, 1).reshape(c, -1, block_size*block_size)
+                output = F.fold(noisy_blocks, output_size=(h+pad_h, w+pad_w), kernel_size=block_size, stride=block_size)
+                
+                # 移除padding
+                output = output[:, :, :h, :w]
+                
+                # 更新noisy_stego_image
+                noisy_stego_image[batch, time] = output.squeeze(0)
+                
+                # 更新current_stego为下一个block_size的输入
+                current_stego = output.squeeze(0)
+    
+    return noisy_stego_image
+def visualize_blocks_and_variances(flow_gray):
+    b, t, _, h, w = flow_gray.shape
+    
+    for batch in range(b):
+        for time in range(t):
+            current_flow = flow_gray[batch, time, 0].cpu().numpy()
+            
+            plt.figure(figsize=(12, 12))
+            plt.imshow(current_flow, cmap='gray')
+            
+            for block_size in [32, 16, 8]:
+                blocks = F.unfold(flow_gray[batch, time], kernel_size=block_size, stride=block_size)
+                blocks = blocks.view(1, block_size, block_size, -1).permute(0, 3, 1, 2)
+                variances = torch.var(blocks, dim=(2, 3)).cpu().numpy()
+                
+                num_blocks_h = h // block_size
+                num_blocks_w = w // block_size
+                
+                for i in range(num_blocks_h):
+                    for j in range(num_blocks_w):
+                        y = i * block_size
+                        x = j * block_size
+                        plt.gca().add_patch(plt.Rectangle((x, y), block_size, block_size, fill=False, edgecolor='r', linewidth=1))
+                        plt.text(x + block_size//2, y + block_size//2, f'{variances[i*num_blocks_w + j]:.2f}', 
+                                 color='r', ha='center', va='center')
+            
+            plt.title(f'Batch {batch}, Time {time}')
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(f'flow_gray_blocks_batch{batch}_time{time}.png')
+            plt.close()
