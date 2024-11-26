@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image
 import models
 import utils
-from dataset import Vimeo90kDatasettxt
+from dataset import Vimeo90kDatasettxtNoisytest
 
 # 4. 融合与逆 DWT
 def steganography(host_dwt, secret_dwt, lambda_factor=0.1):
@@ -92,7 +92,7 @@ epochs=1
 print_every_batch=32
 generate_secret_every_batch=32
 #dataset = Vimeo90kDataset('data')
-dataset = Vimeo90kDatasettxt(root_dir='/home/admin/workspace/vimeo_septuplet')
+dataset = Vimeo90kDatasettxtNoisytest(root_dir='/home/admin/workspace/vimeo_triplet')
 dataloader = DataLoader(dataset, batch_size=bs, shuffle=True)
 # 训练过程
 encoder= models.DenseEncoder().cuda()

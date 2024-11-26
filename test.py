@@ -1,31 +1,36 @@
 import torch
 import os
-from models import DenseEncoder, DenseDecoder,StegoLoss,StegoLosstest
-from utils import dwt_transform, dwt_inverse,convert_to_tensor,StegoTensorProcessor
-from dataset import Vimeo90kDataset
+import models
+#from utils import dwt_transform, dwt_inverse,convert_to_tensor,StegoTensorProcessor
+from dataset import Vimeo90kDatasettxtNoisytest
 from torch.utils.data import DataLoader
 import utils
 from PIL import Image
 import math
 import numpy as np
 import torch.nn as nn
+import models
+import ffmpeg
+import cv2
 
+ffmpeg_flag=False
+#ffmpeg_flag=True
 # 定义损失函数
-criterion = StegoLosstest()
-
+#criterion = StegoLosstest()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # 加载数据集
-dataset = Vimeo90kDataset('data')
+dataset = Vimeo90kDatasettxtNoisytest(root_dir='/home/admin/workspace/vimeo_triplet')
+#dataset = Vimeo90kDatasettxtNoisy(root_dir='/home/admin/workspace/vimeo_triplet')
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
-# 加载保存的模型
-save_dir = './model_imporedEn_DenseDe_1001'
+# save_dir = './tripdata_model_imporedEn_secRes_DenseDe_10/'
+save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy/'
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
-decoder_save_path = os.path.join(save_dir, 'decoder_model2.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
+# 训练过程
+encoder= models.DenseEncoderNoisy().cuda()
+decoder= models.DenseDecoderNoisy().cuda()
 
-encoder = DenseEncoder()
-decoder = DenseDecoder()
-
-# 加载模型权重
 encoder.load_state_dict(torch.load(encoder_save_path))
 decoder.load_state_dict(torch.load(decoder_save_path))
 
@@ -38,93 +43,114 @@ iwt_module = utils.IWT().cuda()
 loss_fn = nn.BCEWithLogitsLoss()
 # 测试过程
 with torch.no_grad():
-    for host, flow_gray in dataloader:
-        secret = torch.randint(0, 2, flow_gray.shape).float()
+    for host12, flow_gray in dataloader:
+        #secret = torch.randint(0, 2, flow_gray.shape).float()
+        #host=host2[:,1:,:,:,:]
+        #host12进入视频编码，host23进入encoder
+        #host12=host123[:,:2,:,:,:]
+        host12=host12.permute(0, 1, 4, 2, 3)
+
+        stego12=host12.clone()
+        host2=host12[:,1,:,:,:].unsqueeze(0)
+        b,t,_,_,_=host2.shape
+
+        secret = torch.randint(0, 2, (b, 1, 256, 448, 1), device=device).float()
         # secret = torch.randint(0, 2, host.shape).float()
 
         # DWT 变换
-        host = host.permute(0, 1, 4, 2, 3)
         secret = secret.permute(0, 1, 4, 2, 3)
         flow_gray = flow_gray.permute(0, 1, 4, 2, 3)
+        flow_gray_dwt=dwt_module(flow_gray)
 
-        secret_dwt_tensor = dwt_module(secret)
-        host_dwt_tensor = dwt_module(host)
-        #secret_rev=iwt_module(secret_dwt_tensor)
-        stego_dwt_tensor = encoder(host_dwt_tensor, secret_dwt_tensor)
+        secret_dwt = dwt_module(secret)
+        host2_dwt = dwt_module(host2)
+        
+        res_dwt = encoder(host2_dwt, secret_dwt , flow_gray_dwt)
 
-        stego_image = iwt_module(stego_dwt_tensor)
+        res = iwt_module(res_dwt)
+        res=res.permute(0,2,1,3,4)
+        res=models.framenorm(res)
+        res=res.permute(0,2,1,3,4)
 
-        # stego_image_save = stego_image.detach().squeeze(0).cpu().numpy()  # 去除大小为1的维度，并转为 numpy
-        # #循环保存每张stego
-        # for i in range(stego_image_save.shape[0]):
-        #     # 转换到 PIL Image 所需的形状 (H, W, C)
-        #     #img = Image.fromarray((stego_image[i].transpose(1, 2, 0) * 255).astype('uint8'))  # 假设数据在0-1之间，需要转换到0-255
-        #     img = Image.fromarray(stego_image_save[i].transpose(1, 2, 0).astype('uint8'))
-        #     # 创建文件名
-        #     filename = f"stego{i+1}.png"
-        #     # 保存图片
-        #     img.save(os.path.join(os.getcwd(), filename))
-        #     print(f"Saved {filename}")
+        stego=(host2+res).clamp(-1,1)
+        stego_dwt = dwt_module(stego)
+        stego_image=(stego+1.0)*127.5
 
+        if ffmpeg_flag:
+            stego12[:, 0, :, :, :]  =(stego12[:, 0, :, :, :]+1.0)*127.5
+            stego12[:, 1, :, :, :] = stego_image
 
-        # 检查 stego_image 的新形状
-        # print(f"New shape of stego_image after adjustment: {stego_image.shape}")
-        # 对每一个batch里每一张图片添加噪声
-        # noisy_stego_image = []
-        # for b in range(len(stego_image)):
-        #     noisy_stego_image_t = []
-        #     for t in range(len(stego_image[b])):
-        #         stego_image_np = stego_image[b, t].permute(1, 2, 0).detach().numpy()  # (C, H, W) -> (H, W, C)
-        #         # 噪声叠加
-        #         noisy_stego = utils.add_noise(stego_image_np, flow_gray.numpy())
-        #         noisy_stego_image_t.append(noisy_stego)
-        #
-        #     noisy_stego_image.append(noisy_stego_image_t)
+            save_dir = "./video"
+            os.makedirs(save_dir, exist_ok=True)
+            stego_paths = [os.path.join(save_dir, f"stego{i+1}.png") for i in range(2)]
+            flow_path=os.path.join(save_dir, "flow.png")
+            video_path = os.path.join(save_dir, "stego_video.mp4")
+            decoded_image_paths = [os.path.join(save_dir, f"video{i+1}.png") for i in range(2)]
 
-        # #保存添加添加噪声后的
-        # for b, noisy_stego_image_t in enumerate(noisy_stego_image):
-        #     for t, noisy_stego in enumerate(noisy_stego_image_t):
-        #         img = Image.fromarray(noisy_stego.astype('uint8'))
-        # #创建文件名
-        #         filename = f"noisy{t+1}.png"
-        #     # 保存图片
-        #         img.save(os.path.join(os.getcwd(), filename))
-        #         print(f"Saved {filename}")
+            #for i in range(2):
+            img_np = stego12[0, 0].permute(1, 2, 0).cpu().numpy()#.clip(0, 255).astype(np.uint8)  # Convert to HWC and uint8
+            img_np = np.round(img_np).astype(np.uint8)
+            Image.fromarray(img_np).save(stego_paths[0])
 
-        # # 噪声叠加
-        # noisy_stego_image = add_noise(stego_image_np, flow_gray.numpy())
+            img_np = stego12[0, 1].permute(1, 2, 0).cpu().numpy()#.clip(0, 255).astype(np.uint8)  # Convert to HWC and uint8
+            img_np = np.round(img_np).astype(np.uint8)
+            Image.fromarray(img_np).save(stego_paths[1])
+            
+            img_np=((flow_gray[0,0,0]+1.0)*127.5).cpu().numpy()#.astype(np.uint8)
+            img_np = np.round(img_np).astype(np.uint8)
+            Image.fromarray(img_np).save(flow_path)
 
-        # noisy_stego_image_tensor = torch.tensor(noisy_stego_image, dtype=torch.float32, requires_grad=True).permute(2, 0, 1).unsqueeze(0).unsqueeze(0)  # (H, W, C) -> (B=1, T=1, C, H, W)
-        # noisy_stego_image_tensor = torch.tensor(noisy_stego_image, dtype=torch.float32, requires_grad=True)
-        # noisy_stego_image_tensor = noisy_stego_image_tensor.permute(0, 1, 4, 2, 3)
+            # Encode images into an H.265 video
+            ffmpeg.input(f'{save_dir}/stego%d.png', framerate=1).output(video_path, vcodec='libx265', qp=27).run(overwrite_output=True,quiet=True)
+            
+            # Decode the video back into frames as video1.png and video2.png
+            ffmpeg.input(video_path).output(f'{save_dir}/video%d.png', start_number=1).run(quiet=True)
 
-        rs = decoder(stego_image)
+            # Load video2.png as a tensor with shape (1, 1, 3, h, w)
+            video2_img = cv2.imread(decoded_image_paths[1])
+            video2_img = cv2.cvtColor(video2_img, cv2.COLOR_BGR2RGB)
 
-        #rs = iwt_module(rs_dwt)
-        rs_sig = torch.sigmoid(rs)
-        msebit = loss_fn(rs, secret)
-        #rs_binary = (rs_binary > 0.7).float()
-        num05=(rs_sig > 0.5).float()
+            video2_tensor = torch.FloatTensor(video2_img).to(device)
+            video2_tensor=video2_tensor.permute(2,0,1).unsqueeze(0).unsqueeze(0)
+            #video2_tensor=video2_tensor.permute(0,2,1,3,4)
+            video2_tensor=video2_tensor/127.5-1.0
+            
+            video2_dwt_tensor=dwt_module(video2_tensor)
 
-        # num_secret_than0=(secret>0).sum().item()
-        # num_greater_than_0 = (rs_sig > 0).sum().item()
-        # num_greater_than_03 = (rs_sig > 0.3).sum().item()
-        # num_greater_than_05 = (rs_sig > 0.5).sum().item()
-        # num_greater_than_07 = (rs_sig > 0.7).sum().item()
-        one=(secret==1.0).float().sum().item()
-        correct_bits = (num05 == secret).float()
-        correct_count = correct_bits.sum().item()
-        percent=correct_count/688128
-        #msebit = torch.mean((rs_binary - secret) ** 2)
-        # 维度匹配
-        # loss = criterion(host, noisy_stego_image_tensor, secret, secret)  # 使用原始 secret 与提取的 secret 做比较
-        #loss = criterion(host, noisy_stego_image_tensor, rs_binary, secret)
-        mse,acc = criterion(host, stego_image, num05, secret)
-        psnr = 20 * math.log10(255.0 / math.sqrt(mse))
-        # print(f'psnr: {psnr.item()} acc: {1-acc.item()}')
-        print(f'psnr: {psnr} acc: { acc.item()}')
+            rs_dwt = decoder(video2_dwt_tensor)
+            rs=iwt_module(rs_dwt)
 
-        # 可以在这里添加代码来保存或显示结果图像
-        # ...
+            #msebit = loss_fn(rs, secret)
+            msestego=utils.MSE(host2, stego)
+            msecompress=utils.MSE(stego,video2_tensor)
+            acc=utils.ACC(secret,rs)
+
+           
+            psnrstego = 20 * math.log10(255.0 / math.sqrt(msestego))
+            psnrcompress = 20 * math.log10(255.0 / math.sqrt(msecompress))
+            print(f'psnrstego: {psnrstego}  psnrcompress: {psnrcompress} acc: { acc}')
+
+        else:
+            # noisy_stego_image = utils.adaptive_block_division(flow_gray,stego_image)
+
+            stego_image=stego_image.round()
+            stego_image_norm=stego_image/127.5 -1.0
+            stego_image_norm_dwt=dwt_module(stego_image_norm)
+            #noisy_stego_image = stego_image
+            #noisy_stego_image= noisy_stego_image.round()
+            #noisy_stego_image_tensor=dwt_module(noisy_stego_image)
+            #rs_dwt = decoder(noisy_stego_image_tensor)
+            rs_dwt = decoder(stego_image_norm_dwt)
+            rs=iwt_module(rs_dwt)
+
+            msebit = loss_fn(rs, secret)
+           
+            msestego=utils.MSE((host2+1.0)*127.5, stego_image)
+            acc=utils.ACC(secret,rs)
+           
+            psnrstego = 20 * math.log10(255.0 / math.sqrt(msestego))
+            print(f'psnrstego: {psnrstego}  acc: { acc}')
+
+        pass
 
 print('Testing complete.')

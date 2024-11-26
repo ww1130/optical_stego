@@ -9,60 +9,12 @@ from torch.utils.data import DataLoader, Dataset
 from PIL import Image,ImageDraw,ImageFont
 import models
 import torch.nn.functional as F
-
-def dwt_transform(tensor):
-    # 输入 tensor 形状为 (B, T, C, H, W)
-    B, T, C, H, W = tensor.shape
-    dwt_coeffs = []
-
-    # 对每个 batch、时间步、通道分别进行 DWT 变换
-    for b in range(B):
-        batch_coeffs = []
-        for t in range(T):
-            time_coeffs = []
-            for c in range(C):
-                # 获取 (H, W) 的二维图像数据
-
-                img = tensor[b, t, c, :, :].cpu().numpy()
-                # 使用 pywt 进行 DWT 变换
-                coeffs = pywt.dwt2(img, 'haar')
-                ll, (lh, hl, hh) = coeffs
-                # 将结果转换为 torch 张量
-
-                time_coeffs.append((torch.tensor(ll), torch.tensor(lh), torch.tensor(hl), torch.tensor(hh)))
-            batch_coeffs.append(time_coeffs)
-        dwt_coeffs.append(batch_coeffs)
-
-    return dwt_coeffs
-
-def dwt_inverse(dwt_coeffs):
-    B = len(dwt_coeffs)
-    T = len(dwt_coeffs[0])
-    C = len(dwt_coeffs[0][0])
-
-    # 重建原始图像
-    reconstructed_images = []
-
-    for b in range(B):
-        batch_imgs = []
-        for t in range(T):
-            time_imgs = []
-            for c in range(C):
-                ll, lh, hl, hh = dwt_coeffs[b][t][c]
-
-                # 使用 pywt 进行逆 DWT 变换
-                img_reconstructed = pywt.idwt2((ll.detach().cpu().numpy(), (lh.detach().cpu().numpy(), hl.detach().cpu().numpy(), hh.detach().cpu().numpy())), 'haar')
-
-                # 将结果转换回张量，并确保保留梯度信息
-                img_reconstructed_tensor = torch.tensor(img_reconstructed, dtype=torch.float32, device=ll.device,requires_grad=True)
-                #img_reconstructed_tensor.requires_grad_(True)
-
-                time_imgs.append(img_reconstructed_tensor)
-            batch_imgs.append(torch.stack(time_imgs, dim=0))  # (C, H, W)
-        reconstructed_images.append(torch.stack(batch_imgs, dim=0))  # (T, C, H, W)
-
-    return torch.stack(reconstructed_images, dim=0)  # (B, T, C, H, W)
-
+import torch.multiprocessing as mp
+# from torch.fft import fft, ifft, fftshift, ifftshift
+#from scipy.fft import dct, idct
+# from torchdct import dct, idct
+# from scipy.fftpack import dctn,idctn
+import torch_dct as dct
 
 class DWT(nn.Module):
     def __init__(self):
@@ -71,7 +23,6 @@ class DWT(nn.Module):
 
     def forward(self, x):
         return dwt_init(x)
-
 
 def dwt_init(x):
     # 假设 x 的形状是 (b, t, c, h, w)
@@ -111,7 +62,6 @@ class IWT(nn.Module):
     def forward(self, x):
         return iwt_init(x)
 
-
 def iwt_init(x):
     r = 2  # 缩放因子（在每个方向上扩大尺寸）
     in_batch, in_time, in_channel, in_freq, in_height, in_width = x.size()
@@ -135,7 +85,6 @@ def iwt_init(x):
     h[:, :, :, 1::2, 1::2] = x1 + x2 + x3 + x4
 
     return h
-
 
 class StegoTensorProcessor:
     def __init__(self, stego_dwt):
@@ -177,120 +126,164 @@ def convert_to_tensor(item):
     else:
         return torch.tensor(item)
 
-
-def add_noise(image, flow_gray):
-    # 确保输入图像的形状是三维的 (H, W, C)
-    if len(image.shape) != 3:
-        raise ValueError("Input image must have shape (H, W, C)")
-
-    block_size = 16
-    height, width, channels = image.shape
-    noisy_image = image.copy()
-
-    # 对每个图像块叠加噪声
-    for i in range(0, height, block_size):
-        for j in range(0, width, block_size):
-            # 取出灰度图像对应位置的块
-            block = flow_gray[0, i:i + block_size, j:j + block_size]  # 灰度图块的大小 (block_size, block_size)
-            # 跳过图像边缘块
-            if block.shape[0] != block_size or block.shape[1] != block_size:
-                continue
-            # 计算块亮度均值
-            avg_brightness = np.mean(block)
-            noise_intensity = avg_brightness / 255.0  # 亮度噪声
-            # 创建与块匹配的噪声
-            noise = np.random.normal(scale=noise_intensity * 25, size=(block_size, block_size, channels))
-            # 确保噪声形状与图像块形状匹配
-            noisy_image[i:i + block_size, j:j + block_size, :] += noise
-    # 像素值
-    noisy_image = np.clip(noisy_image, 0, 255).astype(np.uint8)
-    return image
-    #return noisy_image
-
-
-def add_noise_based_on_variance(stego_image, flow_gray):
-    b, t, c, h, w = stego_image.shape
+def sobel_filter(x):
+    """
+    计算X和Y方向的梯度
+    :param x: 输入的灰度张量 (b, 1, h, w)
+    :return: X和Y方向的梯度张量 (b, 2, h, w)
+    """
+    sobel_kernel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], device=x.device).view(1, 1, 3, 3)
+    sobel_kernel_y = sobel_kernel_x.transpose(2, 3)
     
-    # 确保flow_gray的shape正确
-    assert flow_gray.shape == (b, t, 1, h, w), "Flow gray shape mismatch"
+    grad_x = F.conv2d(x, sobel_kernel_x, padding=1)
+    grad_y = F.conv2d(x, sobel_kernel_y, padding=1)
     
-    noisy_stego_image = stego_image.clone()
-    
-    for batch in range(b):
-        for time in range(t):
-            # 对每个时间步进行处理
-            current_flow = flow_gray[batch, time, 0]
-            current_stego = stego_image[batch, time]
+    return torch.cat((grad_x, grad_y), dim=1)
+
+def magnitude(grads):
+    """
+    计算梯度幅值
+    :param grads: 梯度张量 (b, 2, h, w)
+    :return: 梯度幅值张量 (b, 1, h, w)
+    """
+    return torch.sqrt(torch.sum(grads ** 2, dim=1, keepdim=True))
+
+def dct_2d(x):
+    x = dct.dct_2d(x)
+    return x
+
+def idct_2d(x):
+    x = dct.idct_2d(x)
+    return x
+
+def calculate_complexity(image_block):
+    """
+    Calculate the complexity of an image block based on its gradient
+    :param image_block: Tensor of shape (c, height, width)
+    :return: Complexity score
+    """
+    grad_x = torch.abs(image_block[:, :, 1:, :] - image_block[:, :, :-1, :])
+    grad_y = torch.abs(image_block[:, :, :, 1:] - image_block[:, :, :, :-1])
+    complexity = torch.mean(grad_x) + torch.mean(grad_y)
+    return complexity
+def zigzag_indices(height, width):
+    indices = []
+    for i in range(height + width - 1):
+        if i < height:
+            row_start, col_start = i, 0
+        else:
+            row_start, col_start = height - 1, i - height + 1
+        while row_start >= 0 and col_start < width:
+            indices.append((row_start, col_start))
+            row_start -= 1
+            col_start += 1
+    return indices
+
+def adaptive_block_division(flow_tensor, img_tensor, threshold_small=1000, threshold_large=3000, min_block_size=16):
+    b, _, c, h, w = img_tensor.size()
+    noisytensor = img_tensor.clone()
+
+    # 计算梯度
+    flow_tensor = flow_tensor.squeeze(1)  # (b, 1, h, w)
+    #grads = sobel_filter(flow_tensor)
+    #grad_magnitude = magnitude(grads)
+
+    def process_block(x, y, width, height, batch_idx):
+        stack = [(x, y, width, height)]
+        while stack:
+            x, y, width, height = stack.pop()
+            if width >= 32:
+                current_threshold = threshold_small
+            else:
+                current_threshold = threshold_large
             
-            # 自适应分块
-            for block_size in [32, 16, 8]:
-                # 计算需要的padding
-                pad_h = (block_size - h % block_size) % block_size
-                pad_w = (block_size - w % block_size) % block_size
+            #block_grad = grad_magnitude[batch_idx, :, y:y + height, x:x + width]
+            block_flow = flow_tensor[batch_idx, :, y:y + height, x:x + width]
+            
+            #if torch.max(block_grad) > current_threshold and width > min_block_size and height > min_block_size:
+            if torch.var(block_flow) > current_threshold and width > min_block_size and height > min_block_size:
+                half_width = width // 2
+                half_height = height // 2
                 
-                # 对flow和stego进行padding
-                padded_flow = F.pad(current_flow, (0, pad_w, 0, pad_h))
-                padded_stego = F.pad(current_stego, (0, pad_w, 0, pad_h))
+                stack.append((x, y, half_width, half_height))
+                stack.append((x + half_width, y, half_width, half_height))
+                stack.append((x, y + half_height, half_width, half_height))
+                stack.append((x + half_width, y + half_height, half_width, half_height))
+            else:
+                block_brightness = torch.mean(flow_tensor[batch_idx, :, y:y + height, x:x + width])
                 
-                # 使用unfold进行分块
-                flow_blocks = F.unfold(padded_flow.unsqueeze(0).unsqueeze(0), kernel_size=block_size, stride=block_size)
-                flow_blocks = flow_blocks.view(1, block_size, block_size, -1).permute(0, 3, 1, 2)
+                block = img_tensor[batch_idx, :, :, y:y + height, x:x + width]
+                block_complexity = calculate_complexity(block)
+                #zero_ratio = 0.7 + 0.2 * (block_brightness / 255.0)
+                zero_ratio = 0.7 + 0.1 * (block_brightness / 255.0) + 0.2 * (block_complexity / 255.0)
+                #zero_ratio2 = 0.7 + 0.2 * (block_brightness / 255.0) + 0.2 * (block_complexity / 255.0)
+                zero_ratio = max(0.7, min(zero_ratio, 0.9))  # 限制在0.7到0.95之间
+
                 
-                # 计算每个块的方差
-                variances = torch.var(flow_blocks, dim=(2, 3))
-                
-                # 对stego image进行分块
-                stego_blocks = F.unfold(padded_stego.unsqueeze(0), kernel_size=block_size, stride=block_size)
-                stego_blocks = stego_blocks.view(c, block_size, block_size, -1).permute(0, 3, 1, 2)
-                
-                # 为每个通道生成噪声
-                noise = torch.randn_like(stego_blocks) * variances.view(1, -1, 1, 1).sqrt()
-                
-                # 将噪声加到对应的stego image块上
-                noisy_blocks = stego_blocks + noise
-                
-                # 将处理后的块放回原图
-                noisy_blocks = noisy_blocks.permute(0, 2, 3, 1).reshape(c, -1, block_size*block_size)
-                output = F.fold(noisy_blocks, output_size=(h+pad_h, w+pad_w), kernel_size=block_size, stride=block_size)
-                
-                # 移除padding
-                output = output[:, :, :h, :w]
-                
-                # 更新noisy_stego_image
-                noisy_stego_image[batch, time] = output.squeeze(0)
-                
-                # 更新current_stego为下一个block_size的输入
-                current_stego = output.squeeze(0)
+                block_dct = torch.stack([dct_2d(block[0, i]) for i in range(block.size(1))], dim=0).unsqueeze(0)
+
+
+                zigzag_idx = zigzag_indices(height, width)
+                block_dct_flattened = block_dct.view(c, -1)
+                block_dct_zigzag = block_dct_flattened[:, [idx[0] * width + idx[1] for idx in zigzag_idx]]
+                num_coeffs = block_dct_zigzag.size(1)  
+                num_zeros = int(num_coeffs * zero_ratio)
+                start=num_coeffs-num_zeros
+                block_dct_zigzag[:, start:] = 0
+                block_dct_flattened[:, [idx[0] * width + idx[1] for idx in zigzag_idx]] = block_dct_zigzag
+                block_dct_zero = block_dct_flattened.view(c, height, width).unsqueeze(0)
+
+                #block_idct = idct_2d(block_dct.view(c, height, width)).view(1, c, height, width)
+                block_idct = torch.stack([idct_2d(block_dct_zero[0,i]) for i in range(block_dct.size(1))], dim=0)
+                noisytensor[batch_idx, :, :, y:y + height, x:x + width] = block_idct
+                #mse=torch.mean((noisytensor[batch_idx, :, :, y:y + height, x:x + width] - img_tensor[batch_idx, :, :, y:y + height, x:x + width]) ** 2)
+                #pass
+                #cv2.rectangle(out_flow_np, (x, y), (x + width, y + height), (0, 0, 128), 1)
+
+    for batch_idx in range(b):
+        # out_flow=flow_tensor[batch_idx,:,:,:].clone()
+        # out_flow = out_flow.squeeze(0).squeeze(0)
+        # out_flow_np = out_flow.cpu().numpy()
+        # output_path = '/mnt/workspace/optical_stego/output_grid_image.png'
+        for y in range(0, h, 64):
+            for x in range(0, w, 64):
+                width = min(64, w - x)
+                height = min(64, h - y)
+                process_block(x, y, width, height, batch_idx)
+        # cv2.imwrite(output_path, out_flow_np)
+        # print(f"结果已保存到: {output_path}")
+        # pass
+
+    return noisytensor
+
     
-    return noisy_stego_image
-def visualize_blocks_and_variances(flow_gray):
-    b, t, _, h, w = flow_gray.shape
-    
-    for batch in range(b):
-        for time in range(t):
-            current_flow = flow_gray[batch, time, 0].cpu().numpy()
-            
-            plt.figure(figsize=(12, 12))
-            plt.imshow(current_flow, cmap='gray')
-            
-            for block_size in [32, 16, 8]:
-                blocks = F.unfold(flow_gray[batch, time], kernel_size=block_size, stride=block_size)
-                blocks = blocks.view(1, block_size, block_size, -1).permute(0, 3, 1, 2)
-                variances = torch.var(blocks, dim=(2, 3)).cpu().numpy()
-                
-                num_blocks_h = h // block_size
-                num_blocks_w = w // block_size
-                
-                for i in range(num_blocks_h):
-                    for j in range(num_blocks_w):
-                        y = i * block_size
-                        x = j * block_size
-                        plt.gca().add_patch(plt.Rectangle((x, y), block_size, block_size, fill=False, edgecolor='r', linewidth=1))
-                        plt.text(x + block_size//2, y + block_size//2, f'{variances[i*num_blocks_w + j]:.2f}', 
-                                 color='r', ha='center', va='center')
-            
-            plt.title(f'Batch {batch}, Time {time}')
-            plt.axis('off')
-            plt.tight_layout()
-            plt.savefig(f'flow_gray_blocks_batch{batch}_time{time}.png')
-            plt.close()
+def print_decoder_gradients(decoder):
+    for name, param in decoder.named_parameters():
+        if param.requires_grad:
+            gradient_status = "有梯度" if param.grad is not None else "无梯度"
+            print(f"Layer: {name} - {gradient_status}")
+
+def log_to_file(log_message, log_file="train.log"):
+  """将日志消息追加到指定文件中。
+
+  Args:
+    log_message: 要写入日志文件的字符串。
+    log_file: 日志文件的名称，默认为 "train.log"。
+  """
+  with open(log_file, "a") as f:
+    f.write(log_message + "\n")
+
+def MSE(host,stego):
+    mse = torch.mean((host - stego) ** 2)
+    return mse
+
+def ACC(secret,rs):
+    b=secret.shape[0]
+    rs_sig=torch.sigmoid(rs)
+    num05 = (rs_sig > 0.5).float()
+    correct_bits = (num05 == secret).float()
+    correct_count = correct_bits.sum().item()
+    acc = correct_count / (256*448*b)
+    return acc
+
+

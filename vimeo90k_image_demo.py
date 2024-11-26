@@ -55,7 +55,8 @@ def process_sequence(model, sequence_dir, device):
     pattern = r'^im\d\.png$'
     images = sorted([os.path.join(sequence_dir, img) for img in os.listdir(sequence_dir) if re.match(pattern, img)])
 
-    for i in range(len(images) - 1):
+    #for i in range(len(images) - 1):
+    for i in range(1,2):
         img1 = images[i]
         img2 = images[i + 1]
 
@@ -81,13 +82,50 @@ def process_sequence(model, sequence_dir, device):
         os.remove(flow_flo_path)
 
         #print(f'Successfully saved {flow_gray_path} and deleted {flow_flo_path}')
+#删除im6，im7
+# def process_sequence(model, sequence_dir, device):
+#     pattern = r'^im\d\.png$'
+#     images = sorted([os.path.join(sequence_dir, img) for img in os.listdir(sequence_dir) if re.match(pattern, img)])
+
+#     # 仅处理前5张图片
+#     for i in range(5):
+#         img1 = images[i]
+#         img2 = images[i + 1]
+
+#         # 计算光流
+#         result = inference_model(model, img1, img2, valids=args.valid)
+
+#         # 生成文件名前缀
+#         out_prefix = f'flow_{osp.basename(img1)[:-4]}_{osp.basename(img2)[:-4]}'
+#         flow_flo_path = osp.join(sequence_dir, f'{out_prefix}.flo')
+
+#         # 保存 .flo 文件
+#         write_flow(result, flow_flo_path)
+
+#         # 读取并转换为灰度图
+#         flow_data = read_flo_file(flow_flo_path)
+#         flow_speed = compute_flow_speed(flow_data)
+
+#         # 保存灰度图
+#         flow_gray_path = osp.join(sequence_dir, f'{out_prefix}_gray.png')
+#         save_flow_speed_as_grayscale(flow_speed, flow_gray_path)
+
+#         # 删除 .flo 文件
+#         os.remove(flow_flo_path)
+
+#     # 删除 im6.png 和 im7.png
+#     for img_num in [6, 7]:
+#         img_path = osp.join(sequence_dir, f'im{img_num}.png')
+#         if osp.exists(img_path):
+#             os.remove(img_path)
+#             #print(f'Deleted {img_path}')
 
 
 def main(args):
     # 初始化模型
     model = init_model(args.config, args.checkpoint, device=args.device)
     #data_dir = 'data'
-    data_dir = '/home/admin/workspace/vimeo_septuplet/sequences'
+    data_dir = '/mnt/workspace/vimeo_triplet/sequences'
 
     # 遍历 vimeo90k 的文件结构
     for root, dirs, files in os.walk(data_dir):
@@ -102,8 +140,9 @@ def main(args):
             sequence_dir = osp.join(root, dir_name)
             for root2, dirs2, files2 in os.walk(sequence_dir):
                 for dir_name2 in dirs2:
-                    sequence_dir2 = osp.join(root2, dir_name2)
-                    if len(os.listdir(sequence_dir2)) >= 7:
+                    sequence_dir2 = osp.join(root2, dir_name2)  
+                    # if len(os.listdir(sequence_dir2)) >= 7:
+                    if len(os.listdir(sequence_dir2)) >= 3:
                         process_sequence(model, sequence_dir2, args.device)
 
             print(f'Successfully processed {sequence_dir}')
