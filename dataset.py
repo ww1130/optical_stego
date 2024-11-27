@@ -319,8 +319,8 @@ class Vimeo90kDatasettxtNoisytest(Dataset):
 
         #print(sequence_path)
 
-        # 加载IM1,IM2,im3,test时，encoder im2,视频编码im1.im2得到视频
-        for i in range(1, 3):
+        # 加载IM1,IM2,im3,test时，encoder im2,视频编码im1.im2,im3得到视频
+        for i in range(1, 4):
             img_path = os.path.join(sequence_path, f'im{i}.png')
             if os.path.exists(img_path):
                 img = cv2.imread(img_path)
@@ -347,7 +347,7 @@ class Vimeo90kDatasettxtNoisytest(Dataset):
         flow_grays = np.stack(flow_grays, axis=0)  # (3, H, W)
         flow_grays = np.expand_dims(flow_grays, axis=-1)  # (6, H, W, 1)
 
-        images = images / 127.5 - 1.0
+        #images = images / 127.5 - 1.0  #在这里先不做round,因为test时，计算psnr需要和原始的图片计算
         flow_grays = flow_grays / 127.5 - 1.0
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -47,8 +47,8 @@ class Vimeo90kDatasettxtNoisy(Dataset):
                 raise FileNotFoundError(f"Image {img_path} does not exist.")
         
         # 保存图像路径
-        im1_path = os.path.join(sequence_path, 'im1.png')
-        im2_path = os.path.join(sequence_path, 'im2.png')
+        #im1_path = os.path.join(sequence_path, 'im1.png')
+        #im2_path = os.path.join(sequence_path, 'im2.png')
         video_path = os.path.join(sequence_path, 'x265_32.mp4')
         decoded_im1_path = os.path.join(sequence_path, 'decoded_x265_32_im1.png')
         decoded_im2_path = os.path.join(sequence_path, 'decoded_x265_32_im2.png')

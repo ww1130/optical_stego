@@ -529,12 +529,15 @@ class DenseDecoder(nn.Module):
         x = x.permute(0, 2, 1, 3, 4)
         return x
 
-def framenorm(batch): # batch:(B,C,F,H,W)
+def framenorm(batch): 
+    batch=batch.permute(0,2,1,3,4)# batch:(B,C,F,H,W)
     m, s = torch.mean(batch), torch.std(batch)
     batch = batch.clamp(m-s*7, m+s*7)
     m, s = torch.mean(batch), torch.std(batch)
     batch = batch.clamp(m-s*7, m+s*7)
-    return batch / (torch.sqrt(torch.sum(batch**2, dim=[1,3,4], keepdim=True)) + 1e-3*s)
+    batch=batch / (torch.sqrt(torch.sum(batch**2, dim=[1,3,4], keepdim=True)) + 1e-3*s)
+    batch=batch.permute(0,2,1,3,4)
+    return batch
 
 
 

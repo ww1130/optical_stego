@@ -22,9 +22,10 @@ with open(log_file_path, 'w') as f:
     pass  # 这里什么都不做，只是清空文件
 
 # 加载数据集
+target_mse_low=1e-5
 bs=64
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-epochs=2
+epochs=1
 print_every_batch=1
 generate_secret_every_batch=1
 dataset = Vimeo90kDatasettxtNoisy(root_dir='/home/admin/workspace/vimeo_triplet')
@@ -42,6 +43,7 @@ encoder_mse_threshold_low = 6  # 当 MSE 小于此值时，loss=fnbit
 encoder_mse_threshold_high = 8 # 当 MSE 大于此值时，loss=mse+fnbit
 
 loss_fn = nn.BCEWithLogitsLoss().cuda()
+#loss_fn = nn.BCELoss().cuda()
 mse_loss = nn.MSELoss().to(device)
 dwt_module = utils.DWT().cuda()
 iwt_module = utils.IWT().cuda()
@@ -49,6 +51,7 @@ iwt_module = utils.IWT().cuda()
 
 for epoch in range(epochs):
     running_loss = 0.0
+    running_mse_quant=0.0
     running_mse = 0.0
     running_mse_noisy=0.0
     running_fnbit = 0.0
@@ -76,37 +79,48 @@ for epoch in range(epochs):
         res_dwt = encoder(host_dwt, secret_dwt ,flow_gray_dwt)
 
         res = iwt_module(res_dwt)
-        res=res.permute(0,2,1,3,4)
-        res=models.framenorm(res)
-        res=res.permute(0,2,1,3,4)
+        #res=models.framenorm(res)
 
         stego=(host+res).clamp(-1,1)
         stego_dwt = dwt_module(stego)
 
         #noisy_stego_image = utils.adaptive_block_division(flow_gray,stego_image)
-        noise= host - decoded
-        noisy_stego = stego #+ noise #+host
+        noise_x265 = host - decoded
+        #noise_guass = quant.noise(stego)
+        stego_quant=quantization(stego)#转换到0，255，再四舍五入，再转换到-1，1
+        
+        noisy_stego = stego_quant  + noise_x265#+ noise_guass # + noise_x265 # +host
         #noisy_stego_image = stego_image_quant + noise_tensor
         noisy_stego_dwt=dwt_module(noisy_stego)
 
         rs_dwt = decoder(noisy_stego_dwt)
         rs=iwt_module(rs_dwt)
+
+        #rs_norm=rs.sigmoid()/255.0
+        #secret_norm=secret/255.0
         
 
         fnbit = loss_fn(rs, secret)
+        #msebit=mse_loss(rs.sigmoid(),secret)
+        msequant=mse_loss(stego,stego_quant)
         mse=mse_loss(host, stego)
         mse_noisy = mse_loss(stego, noisy_stego)
         mse_low=mse_loss(host_dwt[:,:,:,0,:,:], stego_dwt[:,:,:,0,:,:])
+        mse_image_low=mse_loss((host_dwt[:,:,:,0,:,:]+1.0)*127.5, (stego_dwt[:,:,:,0,:,:]+1.0)*127.5)
         acc=utils.ACC(secret,rs)
 
-        loss = 5*fnbit + mse + mse_low
+
+        # loss = 5*fnbit + mse + mse_low 
+        loss = fnbit + 5*mse_low#*10000#+ mse_image_low#- 1000*mse_low
 
         loss.backward()
         optimizer.step()
+        #utils.print_decoder_gradients(encoder)
         optimizer.zero_grad()
-        #print_decoder_gradients(decoder)
+        
 
         running_loss += loss.item()
+        running_mse_quant+=msequant.item()
         running_mse += mse.item()
         running_mse_noisy += mse_noisy.item()
         running_fnbit += fnbit.item()
@@ -116,6 +130,7 @@ for epoch in range(epochs):
         # 每32个batch打印一次
         if (batch_idx + 1) % print_every_batch == 0:
             avg_loss = running_loss / batch_count
+            avg_mse_quant = running_mse_quant / batch_count
             avg_mse = running_mse / batch_count
             avg_mse_noisy = running_mse_noisy / batch_count
             avg_fnbit = running_fnbit / batch_count
@@ -123,12 +138,13 @@ for epoch in range(epochs):
             
             #print(f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f}, MSE_NOISY: {avg_mse_noisy:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}')
             #log_message = f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}'
-            log_message = f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.8f}, MSE: {avg_mse:.8f}, MSE_NOISY: {avg_mse_noisy:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}'
+            log_message = f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.8f}, MSE: {avg_mse:.8f}, MSEquant: {avg_mse_quant:.8f}, MSE_NOISY: {avg_mse_noisy:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}'
             utils.log_to_file(log_message)
             print(log_message)
             #print(f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f}, FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}')
             # 重置累积值
             running_loss = 0.0
+            running_mse_quant=0.0
             running_mse = 0.0
             running_mse_noisy = 0.0
             running_fnbit = 0.0
@@ -140,7 +156,7 @@ for epoch in range(epochs):
        
         
 
-save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy/'
+save_dir = './tripdata_model_imporedEn_secRes_DenseDe_noisy_quant/'
 os.makedirs(save_dir, exist_ok=True)
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
