@@ -287,3 +287,9 @@ def ACC(secret,rs):
     return acc
 
 
+def save_image(image, path):
+    image_np = image.detach().cpu().numpy()  # 如果在GPU上，先转到CPU
+    img = Image.fromarray(image_np.astype(np.uint8))  # 直接从0-255范围的数据创建图像
+    img.save(path)
+
+

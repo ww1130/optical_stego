@@ -49,21 +49,21 @@ class Vimeo90kDatasettxtNoisy(Dataset):
         # 保存图像路径
         #im1_path = os.path.join(sequence_path, 'im1.png')
         #im2_path = os.path.join(sequence_path, 'im2.png')
-        video_path = os.path.join(sequence_path, 'x265_32.mp4')
-        decoded_im1_path = os.path.join(sequence_path, 'decoded_x265_32_im1.png')
-        decoded_im2_path = os.path.join(sequence_path, 'decoded_x265_32_im2.png')
-        decoded_im3_path = os.path.join(sequence_path, 'decoded_x265_32_im3.png')
-        #noise_path = os.path.join(sequence_path, 'noise2_x265_32.npy')
+        video_path = os.path.join(sequence_path, 'x264_32.mp4')
+        decoded_im1_path = os.path.join(sequence_path, 'decoded_x264_32_im1.png')
+        decoded_im2_path = os.path.join(sequence_path, 'decoded_x264_32_im2.png')
+        decoded_im3_path = os.path.join(sequence_path, 'decoded_x264_32_im3.png')
+        #noise_path = os.path.join(sequence_path, 'noise2_x264_32.npy')
 
         # 保存原始图像
         #Image.fromarray(images[0]).save(im1_path)
         #Image.fromarray(images[1]).save(im2_path)
 
         # Encode images into an H.265 video
-        ffmpeg.input(f'{sequence_path}/im%d.png', framerate=1).output(video_path, vcodec='libx265', qp=32).run(overwrite_output=True, quiet=True)
+        ffmpeg.input(f'{sequence_path}/im%d.png', framerate=1).output(video_path, vcodec='libx264', qp=32).run(overwrite_output=True, quiet=True)
 
         # Decode the video back into frames as decoded_im1.png and decoded_im2.png
-        ffmpeg.input(video_path).output(f'{sequence_path}/decoded_x265_32_im%d.png', start_number=1).run(quiet=True)
+        ffmpeg.input(video_path).output(f'{sequence_path}/decoded_x264_32_im%d.png', start_number=1).run(quiet=True)
         os.remove(decoded_im1_path)
         os.remove(decoded_im3_path)
         os.remove(video_path)

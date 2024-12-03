@@ -27,9 +27,30 @@ dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 # save_dir = './tripdata_model_imporedEn_secRes_DenseDe_10/'
 save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy_quant/'
 #save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy/'
-save_dir = './tripdata_model_imporedEn_secRes_DenseDe_noisy_quant/'
-encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
-decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
+save_dir = './tripdata_model_imporedEn_secRes_DenseDe_real_noisy_quant/'
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mse.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32_10mse.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mse_quantNoise.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_32_10mse_quantNoise.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mselow_quantNoise.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_32_10mselow_quantNoise.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_quantNoise.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_quantNoise.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mselow.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_32_10mselow.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5mse.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5mse.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_37_5mselow_5mse.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_37_5mselow_5mse.pth')
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5mseall.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5mseall.pth')
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5msehigh.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5msehigh.pth')
+encoder_save_path = os.path.join(save_dir, 'encoder_model_37_5mselow_5msehigh.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_37_5mselow_5msehigh.pth')
+
+print(encoder_save_path)
+print(decoder_save_path)
 # 训练过程
 encoder= models.DenseEncoderNoisy().cuda()
 decoder= models.DenseDecoderNoisy().cuda()
@@ -47,10 +68,7 @@ loss_fn = nn.BCEWithLogitsLoss()
 # 测试过程
 with torch.no_grad():
     for host123_no_norm, flow_gray in dataloader:
-        #secret = torch.randint(0, 2, flow_gray.shape).float()
-        #host=host2[:,1:,:,:,:]
-        #host12进入视频编码，host23进入encoder
-        #host12=host123[:,:2,:,:,:]
+        #host123_no_norm 传进来三张
         host123_no_norm = host123_no_norm.permute(0, 1, 4, 2, 3)   
         host123 = host123_no_norm  / 127.5 - 1.0
 
@@ -108,7 +126,7 @@ with torch.no_grad():
             img_np = np.round(img_np).astype(np.uint8)
             Image.fromarray(img_np).save(stego_paths[2])
             
-            img_np=((flow_gray[0,0,0]+1.0)*127.5).cpu().numpy()#.astype(np.uint8)#保存的光流图
+            img_np=((flow_gray[0,0,0]+1.0)*127.5).cpu().numpy()#保存的光流图
             img_np = np.round(img_np).astype(np.uint8)
             Image.fromarray(img_np).save(flow_path)
 
@@ -123,22 +141,23 @@ with torch.no_grad():
             video2_img = cv2.cvtColor(video2_img, cv2.COLOR_BGR2RGB)
 
             video2_tensor = torch.FloatTensor(video2_img).to(device)
-            video2_tensor=video2_tensor.permute(2,0,1).unsqueeze(0).unsqueeze(0)
+            video2_tensor =video2_tensor.permute(2,0,1).unsqueeze(0).unsqueeze(0)
             #video2_tensor=video2_tensor.permute(0,2,1,3,4)
-            video2_tensor=video2_tensor/127.5 -1.0
+            video2_tensor_norm =video2_tensor/127.5 -1.0
             
-            video2_dwt_tensor=dwt_module(video2_tensor)
+            video2_dwt_tensor=dwt_module(video2_tensor_norm)
 
             rs_dwt = decoder(video2_dwt_tensor)
             rs=iwt_module(rs_dwt)
 
             #msebit = loss_fn(rs, secret)
-            msestego=utils.MSE(host2, stego)
-            msecompress=utils.MSE(stego,video2_tensor)
+            msestego=utils.MSE(host123_no_norm[:,1,:,:,:], stego_image)
+            msecompress=utils.MSE(stego_image,video2_tensor)
             acc=utils.ACC(secret,rs)
 
            
             psnrstego = 20 * math.log10(255.0 / math.sqrt(msestego))
+
             psnrcompress = 20 * math.log10(255.0 / math.sqrt(msecompress))
             print(f'psnrstego: {psnrstego}  psnrcompress: {psnrcompress} acc: { acc}')
 
