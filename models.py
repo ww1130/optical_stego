@@ -257,6 +257,7 @@ class DenseEncoderNoisy(nn.Module):
         # Initialize the layers for the encoder with concatenated channel and frequency dimensions
         #in_channels = 3 * (4-1)  # 三个色彩通道乘以三个高频带，Assuming input channels and DCT dimension are combined
         in_channels = 3 * 4#all_band嵌入
+        #in_channels = 1 * 6#all_band嵌入
         self.features = nn.Sequential(
             self._conv3d(in_channels, self.hidden_size),
             nn.LeakyReLU(inplace=True),
@@ -313,7 +314,7 @@ class DenseEncoderNoisy(nn.Module):
     def forward(self, video, secret,flow):
         #low_band也嵌入，videoF1就是all_band，只要一帧
         b, t, c, d, h, w = video.size()
-        video=video.reshape(b,1,c*4,h,w)
+        video=video.reshape(b,1,c*d,h,w)
         videoF1 = video[:, :1, :, :, :]
         videoF1 = videoF1.permute(0, 2, 1, 3, 4)
 
@@ -352,7 +353,7 @@ class DenseEncoderNoisy(nn.Module):
 
         # stego_video=videoF1 + x
         stego_video= x
-        stego_video=stego_video.permute(0,2,1,3,4).reshape(b, 1, c, 4, h, w)
+        stego_video=stego_video.permute(0,2,1,3,4).reshape(b, 1, 3, 4, h, w)
 
       
         return stego_video
@@ -452,7 +453,7 @@ class DenseDecoderNoisy(nn.Module):
         """
         b, t, c, d, h, w = x.size()
         # Permute to (B, C, T, H, W) for Conv3d
-        x = x.reshape(b, t, c * 4, h, w)
+        x = x.reshape(b, t, c * d, h, w)
         x = x.permute(0, 2, 1, 3, 4)
 
         # Initialize first convolution

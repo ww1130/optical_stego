@@ -2,6 +2,7 @@ import os
 import numpy as np
 import cv2
 #import pywt
+import logging
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -15,6 +16,8 @@ import torch.multiprocessing as mp
 # from torchdct import dct, idct
 # from scipy.fftpack import dctn,idctn
 import torch_dct as dct
+import ffmpeg
+import time
 
 class DWT(nn.Module):
     def __init__(self):
@@ -281,15 +284,288 @@ def ACC(secret,rs):
     b=secret.shape[0]
     rs_sig=torch.sigmoid(rs)
     num05 = (rs_sig > 0.5).float()
+    #num05 = (rs > 0.5).float()
     correct_bits = (num05 == secret).float()
     correct_count = correct_bits.sum().item()
     acc = correct_count / (256*448*b)
     return acc
 
 
+def rgb_to_yuv420(images):
+    # 初始化用于保存所有时间步骤的结果的列表
+    y_list, u_list, v_list = [], [], []
+
+    for img in images:
+        # 确保图像是uint8类型，并且值在0-255范围内
+        if img.dtype != np.uint8:
+            raise ValueError("输入图像应为uint8类型")
+        
+        # 如果图像是RGB格式，则转换为YUV (4:4:4)
+        if len(img.shape) == 3 and img.shape[2] == 3:
+            yuv_image = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+        else:
+            raise ValueError("图像不是有效的3通道RGB格式")
+
+        # 分离Y、U、V通道
+        y, u, v = cv2.split(yuv_image)
+
+        # 下采样U和V通道至4:2:0格式
+        u_downsampled = cv2.resize(u, (u.shape[1] // 2, u.shape[0] // 2), interpolation=cv2.INTER_CUBIC)
+        v_downsampled = cv2.resize(v, (v.shape[1] // 2, v.shape[0] // 2), interpolation=cv2.INTER_CUBIC)
+
+        # 将结果添加到列表中
+        y_list.append(torch.FloatTensor(y).to('cuda'))
+        # u_list.append(torch.FloatTensor(u_downsampled).to('cuda'))
+        # v_list.append(torch.FloatTensor(v_downsampled).to('cuda'))
+        u_list.append(torch.FloatTensor(u).to('cuda'))
+        v_list.append(torch.FloatTensor(v).to('cuda'))
+
+    # 将所有时间步骤的结果堆叠在一起
+    y_all = torch.stack(y_list, dim=0)  # 形状为 (t, h, w)
+    u_all = torch.stack(u_list, dim=0)  # 形状为 (t, h//2, w//2)
+    v_all = torch.stack(v_list, dim=0)  # 形状为 (t, h//2, w//2)
+
+    return y_all, u_all, v_all
+
+
+def save_yuv_sequence(y_all, u_all, v_all, output_dir='output', filename_prefix='test'):
+    # 确保输出目录存在
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    else:
+        # 清空目录中的所有文件
+        for filename in os.listdir(output_dir):
+            file_path = os.path.join(output_dir, filename)
+            try:
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)  # 删除文件或符号链接
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)  # 删除子目录及其内容
+            except Exception as e:
+                print(f'Failed to delete {file_path}. Reason: {e}')   
+
+    b, t, h, w = y_all.shape  # 获取批次大小、时间长度、高度和宽度
+    _, _, uh, uw = u_all.shape  # 下采样的U和V的高度和宽度
+
+
+    for batch_idx in range(b):
+        filename = f"{filename_prefix}{batch_idx}.yuv"
+        filepath = os.path.join(output_dir, filename)
+        
+        yuv_data = bytearray()
+        for time_idx in range(t):
+            y = y_all[batch_idx, time_idx].detach().cpu().numpy()
+            u = u_all[batch_idx, time_idx].detach().cpu().numpy()
+            v = v_all[batch_idx, time_idx].detach().cpu().numpy()
+            yuv_data.extend(y.astype(np.uint8).tobytes())
+            yuv_data.extend(u.astype(np.uint8).tobytes())
+            yuv_data.extend(v.astype(np.uint8).tobytes())
+        # 一次性写入所有帧的数据
+        with open(filepath, 'wb') as f:
+            f.write(yuv_data)
+
+    # for batch_idx in range(b):
+    #     filename = f"{filename_prefix}_{batch_idx:03d}.yuv"
+    #     filepath = os.path.join(output_dir, filename)
+    #     with open(filepath, 'wb') as f:
+    #         # 将GPU上的张量转移到CPU并转换为NumPy数组
+    #         for time_idx in range(t):
+    #             y = y_all[batch_idx, time_idx].detach().cpu().numpy()
+    #             u_downsampled = u_all[batch_idx, time_idx].detach().cpu().numpy()
+    #             v_downsampled = v_all[batch_idx, time_idx].detach().cpu().numpy()
+
+    #             # 写入YUV数据到文件
+    #             # with open(filepath, 'wb') as f:
+    #             f.write(y.astype(np.uint8).tobytes())
+    #             f.write(u_downsampled.astype(np.uint8).tobytes())
+    #             f.write(v_downsampled.astype(np.uint8).tobytes())
+    
+
+def merge_frames_into_sequence(y_all, u_all, v_all, stego_y_255, stego_uv_255):
+    """
+    将给定的帧合并成一个新的 YUV420 序列。
+    
+    参数：
+    - y_all: 形状为 (b, t, 1, h, w) 的 Y 分量 tensor。
+    - u_all: 形状为 (b, t, 1, h//2, w//2) 的 U 分量 tensor。
+    - v_all: 形状为 (b, t, 1, h//2, w//2) 的 V 分量 tensor。
+    - stego_y_255: 新的 Y 分量帧，形状为 (1, 1, h, w)，值域 [0, 255]。
+    - stego_uv_255: 新的 U 和 V 分量帧，形状为 (1, 1, h//2, w//2)，值域 [0, 255]。
+    
+    返回：
+    - 新的 YUV420 序列，包含原始的第一帧、插入的帧以及原始的最后一帧。
+    """
+    # 确保输入张量是 PyTorch 张量类型
+    if not isinstance(stego_y_255, torch.Tensor):
+        stego_y_255 = torch.tensor(stego_y_255)
+    if not isinstance(stego_uv_255, torch.Tensor):
+        stego_uv_255 = torch.tensor(stego_uv_255)
+
+    # 提取第一帧和最后一帧
+    first_frame_y = y_all[:, 0:1]
+    last_frame_y = y_all[:, -1:]
+    first_frame_u = u_all[:, 0:1]
+    last_frame_v = v_all[:, -1:]
+
+    # 准备新的帧（假定 stego_uv_255 已经被分割成两个独立的张量）
+    stego_u_255, stego_v_255 = stego_uv_255.chunk(2, dim=1)
+
+    # 将新帧的值从 [0, 255] 转换回 [0, 1] 或者适当的范围
+    stego_y = stego_y_255.float() / 255.0
+    stego_u = stego_u_255.float() / 255.0 - 0.5  # 假设原始偏移是 +128
+    stego_v = stego_v_255.float() / 255.0 - 0.5  # 假设原始偏移是 +128
+
+    # 合并 Y, U, V 分量
+    new_y_sequence = torch.cat([first_frame_y, stego_y, last_frame_y], dim=1)
+    new_u_sequence = torch.cat([first_frame_u, stego_u, last_frame_v], dim=1)
+    new_v_sequence = torch.cat([first_frame_u, stego_v, last_frame_v], dim=1)
+
+    return new_y_sequence, new_u_sequence, new_v_sequence
+
+
+
+def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
+    #ffmpeg.input(yuv_file, pix_fmt='yuv420p', video_size=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(overwrite_output=True, quiet=True)
+    ffmpeg.input(yuv_file, pix_fmt='yuv444p', s=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(overwrite_output=True, quiet=True)
+
+
+# def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
+#     if not os.path.exists(yuv_file):
+#         logging.error(f"YUV 文件 {yuv_file} 不存在")
+#         raise FileNotFoundError(f"YUV 文件 {yuv_file} 不存在")
+
+#     try:
+#         # 构建 FFmpeg 命令
+#         process = (
+#             ffmpeg
+#             .input(yuv_file, pix_fmt='yuv444p', s=f'{width}x{height}')
+#             .output(video_path, vcodec='libx265', qp=qp)
+#             .global_args('-loglevel', 'error')
+#             .overwrite_output()
+#         )
+
+#         # 获取并打印 FFmpeg 命令行
+#         cmd = ffmpeg.compile(process)
+#         logging.info(f"Executing FFmpeg command: {' '.join(cmd)}")
+
+#         # 运行 FFmpeg 命令
+#         out, err = process.run(capture_stdout=True, capture_stderr=True)
+
+#         logging.info(f"成功编码 {yuv_file} 至 {video_path}")
+        
+#     except ffmpeg._run.Error as e:
+#         logging.error(f"FFmpeg Error while processing {yuv_file}:")
+#         if e.stdout:
+#             logging.error("stdout: %s", e.stdout.decode())
+#         if e.stderr:
+#             logging.error("stderr: %s", e.stderr.decode())
+#         raise
+
+
+def decode_hevc_to_yuv(video_path, yuv_output_pattern):
+    ffmpeg.input(video_path).output(yuv_output_pattern, vcodec='rawvideo', pix_fmt='yuv444p').run(overwrite_output=True, quiet=True)
+
+def extract_second_frame_from_yuv(yuv_data, width, height):
+    # 计算YUV文件中每一帧的大小
+    frame_size = width * height * 3 #// 2  # YUV420P: Y (w*h) + U (w/2*h/2) + V (w/2*h/2)
+    
+    # 跳过第一帧，读取第二帧的数据
+    second_frame_start = frame_size
+    second_frame_end = second_frame_start + frame_size
+    
+    second_frame_data = yuv_data[second_frame_start:second_frame_end]
+    
+    # 分离Y、U、V通道
+    y_size = width * height
+    u_size = v_size = y_size ##// 4
+    
+    y_data = np.frombuffer(second_frame_data[:y_size], dtype=np.uint8).reshape(height, width)
+    u_data = np.frombuffer(second_frame_data[y_size:y_size + u_size], dtype=np.uint8).reshape(height , width )
+    v_data = np.frombuffer(second_frame_data[y_size + u_size:second_frame_end], dtype=np.uint8).reshape(height , width )
+    
+    return y_data, u_data, v_data
+
+def process_batch(b, outdir, width, height, fps=1, qp=27):
+    final_y = []
+    final_u = []
+    final_v = []
+
+    for i in range(b):
+        # 定义路径
+        yuv_file = os.path.join(outdir, f'test{i}.yuv')
+        mp4_path = os.path.join(outdir, f'test{i}.mp4')
+        decoded_yuv_path = os.path.join(outdir, f'decode{i}.yuv')
+
+        
+        # 编码 YUV 文件为 H.265 视频
+        time.sleep(0.5)
+        encode_yuv_to_hevc(yuv_file, mp4_path, width, height, fps, qp)
+        # 解码 H.265 视频回 YUV 文件
+        decode_hevc_to_yuv(mp4_path, decoded_yuv_path)
+
+        # 读取解码后的 YUV 文件内容
+        with open(decoded_yuv_path, 'rb') as f:
+            yuv_data = f.read()
+
+        # 提取解码后的 YUV 文件中的第二帧
+        y_data, u_data, v_data = extract_second_frame_from_yuv(yuv_data, width, height)
+        
+        # 将第二帧的数据添加到结果列表中
+        final_y.append(y_data)
+        final_u.append(u_data)
+        final_v.append(v_data)
+
+
+    # 将所有数据转换为 NumPy 数组
+    final_y_np = np.stack(final_y, axis=0)  # shape: (b, height, width)
+    final_u_np = np.stack(final_u, axis=0)  # shape: (b, height//2, width//2)
+    final_v_np = np.stack(final_v, axis=0)  # shape: (b, height//2, width//2)
+
+    # 将 NumPy 数组转换为 PyTorch 张量并移动到 CUDA 设备
+    final_y_tensor = torch.from_numpy(final_y_np).to('cuda')
+    final_u_tensor = torch.from_numpy(final_u_np).to('cuda')
+    final_v_tensor = torch.from_numpy(final_v_np).to('cuda')
+
+    # 返回张量
+    return final_y_tensor, final_u_tensor, final_v_tensor
+
+
 def save_image(image, path):
     image_np = image.detach().cpu().numpy()  # 如果在GPU上，先转到CPU
     img = Image.fromarray(image_np.astype(np.uint8))  # 直接从0-255范围的数据创建图像
     img.save(path)
+
+
+# def save_yuv_sequence(images, output_path):
+#     # 获取第一张图片的尺寸
+#     height, width = images[0].shape[:2]
+    
+#     with open(output_path, 'wb') as f:
+#         for img in images:
+#             # 确保图像是uint8类型，并且值在0-255范围内
+#             if img.dtype != np.uint8:
+#                 raise ValueError("输入图像应为uint8类型")
+            
+#             # 如果图像是RGB格式，则转换为YUV (4:4:4)
+#             if len(img.shape) == 3 and img.shape[2] == 3:
+#                 yuv_image = cv2.cvtColor(img, cv2.COLOR_RGB2YUV)
+#             else:
+#                 raise ValueError("图像不是有效的3通道RGB格式")
+
+#             # 分离Y、U、V通道
+#             y, u, v = cv2.split(yuv_image)
+
+#             # 下采样U和V通道至4:2:0格式
+#             u_downsampled = cv2.resize(u, (u.shape[1] // 2, u.shape[0] // 2), interpolation=cv2.INTER_CUBIC)
+#             v_downsampled = cv2.resize(v, (v.shape[1] // 2, v.shape[0] // 2), interpolation=cv2.INTER_CUBIC)
+
+#             # 将每个通道的数据分别写入文件
+#             # f.write(y.astype(np.uint8).tobytes())
+#             # f.write(u.astype(np.uint8).tobytes())
+#             # f.write(v.astype(np.uint8).tobytes())
+
+#             f.write(y.astype(np.uint8).tobytes())
+#             f.write(u_downsampled.astype(np.uint8).tobytes())
+#             f.write(v_downsampled.astype(np.uint8).tobytes())
 
 

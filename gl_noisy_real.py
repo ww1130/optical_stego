@@ -12,19 +12,27 @@ import utils
 import quant
 from dataset import Vimeo90kDatasettxtNoisy,Vimeo90kDatasettxtNoisyReal
 import ffmpeg
+import time
 
 
 save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy/'
 encoder_save_path = os.path.join(save_dir, 'encoder_model.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model.pth')
 
+
+save_dir = './tripdata_model_yuv/'
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32.pth')
+
 log_file_path = 'train.log'
 with open(log_file_path, 'w') as f:
     pass  # 这里什么都不做，只是清空文件
 
 # 加载数据集
+
+width, height = 448, 256
 target_mse_low=1e-5
-bs=64
+bs=64 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 epochs=1
 print_every_batch=1
@@ -59,145 +67,174 @@ for epoch in range(epochs):
     running_acc = 0.0
     batch_count = 0  # 用于计数当前epoch中的batch数
 
-    for batch_idx, (host,flow_gray) in enumerate(dataloader):
-        b,t,_,_,_=host.shape
+    for batch_idx, (host123,flow_gray) in enumerate(dataloader):
+        b,t,h,w,_=host123.shape
+        #host123=host123.permute(0, 1, 4, 2, 3)#转换为b,t,c,h,w
+        #host2=host123[:,1:2,:,:,:]
+        # 初始化用于保存所有批次结果的列表
+        y_list, u_list, v_list = [], [], []
+        for bidx in range(b):
+            images_rgb = [host123[bidx, 0].cpu().numpy(),host123[bidx, 1].cpu().numpy(), host123[bidx, 2].cpu().numpy()]
+            images_rgb = [np.round(img).astype(np.uint8) for img in images_rgb]
+            y_time, u_time, v_time = utils.rgb_to_yuv420(images_rgb)#转换成yuv420
+            y_list.append(y_time.unsqueeze(0))
+            u_list.append(u_time.unsqueeze(0))
+            v_list.append(v_time.unsqueeze(0))
+        y_all = torch.cat(y_list, dim=0)
+        u_all = torch.cat(u_list, dim=0)
+        v_all = torch.cat(v_list, dim=0)
+        #utils.save_yuv_sequence(y_all, u_all, v_all)#保存yuv
 
-        #flow在加载时已经做了归一化了
-        host_norm=host/ 127.5 - 1.0
-        #decoded_norm=decoded/ 127.5 - 1.0
+        #取出第二帧
+        y=y_all[:,1:2,:,:].clone().unsqueeze(2)
+        u=u_all[:,1:2,:,:].clone().unsqueeze(2)
+        v=v_all[:,1:2,:,:].clone().unsqueeze(2)
+
+        #对第二帧进行归一化 -1,1
+        y_norm=y/127.5-1.0
+        u_norm=u/127.5-1.0
+        v_norm=v/127.5-1.0
+
+        #对y分量做dwt   #拼接y，u，v
+        y_norm_dwt=dwt_module(y_norm).squeeze(1)
+        u_norm_dwt=dwt_module(u_norm).squeeze(1)
+        v_norm_dwt=dwt_module(v_norm).squeeze(1)
+        yuv_norm_dwt = torch.cat([y_norm_dwt,u_norm_dwt,v_norm_dwt],dim=2).unsqueeze(1)
+        yuv_norm_dwt = yuv_norm_dwt.reshape(b,1,3,4,128,224)
+        #y_norm_dwt_uvnorm=torch.cat([y_norm_dwt,u_norm,v_norm],dim=2).unsqueeze(1)
+
+        # y_norm_dwt_iwt=iwt_module(y_norm_dwt.unsqueeze(1))
+        # y_norm_dwt_iwt_unorm=(y_norm_dwt_iwt+1)*127.5
+        # mse= mse_loss(y_norm_dwt_iwt_unorm,y)
+
         secret = torch.randint(0, 2, (b, 1, 256, 448, 1), device=device).float()
-
-
         secret = secret.permute(0, 1, 4, 2, 3)
-        host_norm = host_norm.permute(0, 1, 4, 2, 3)
-        host_norm=host_norm[:,1,:,:,:].unsqueeze(1)
-        flow_gray=flow_gray.permute(0, 1, 4, 2, 3)
-        #decoded=decoded.permute(0, 1, 4, 2, 3)
-
-
         secret_dwt = dwt_module(secret)
-        host_dwt = dwt_module(host_norm)
+
+        #host_norm = host_norm.permute(0, 1, 4, 2, 3)
+        #host_norm=host_norm[:,1,:,:,:].unsqueeze(1)
+        flow_gray=flow_gray.permute(0, 1, 4, 2, 3)
         flow_gray_dwt = dwt_module(flow_gray)
+        res_dwt = encoder(yuv_norm_dwt, secret_dwt ,flow_gray_dwt)#出来的形状是(b,t,1,1,6,h/2,w/2),
 
-        res_dwt = encoder(host_dwt, secret_dwt ,flow_gray_dwt)
+        res=iwt_module(res_dwt)#
+        stego_dwt = (yuv_norm_dwt + res_dwt)#.clamp(-1,1)#这里是归一化后的
+        stego=iwt_module(stego_dwt).clamp(-1,1)
+        #stego_uv=torch.cat((u_norm+res_dwt[:,:,:,4:5,:,:].squeeze(1),v_norm+res_dwt[:,:,:,5:6,:,:].squeeze(1)),dim=2).clamp(-1,1)
+        #stego_dwt=torch.cat([stego_y_dwt,stego_uv.unsqueeze(1)],dim=3)
 
-        res = iwt_module(res_dwt)
-        #res=models.framenorm(res)
-
-        stego=(host_norm+res).clamp(-1,1)
-        stego_dwt = dwt_module(stego)
-
-        #noisy_stego_image = utils.adaptive_block_division(flow_gray,stego_image)
-        #noise_x265 = host - decoded
-        #noise_guass = quant.noise(stego)
-        stego_quant=quantization(stego)#转换到0，255，再四舍五入，再转换到-1，1
-       
-        #todo:上一步，恢复到255round后，进入视频编码器，计算得到真实噪声，再把这个噪声加到stego_quant上,那这样加载数据集时就要加载3张im了
-        stego255=(stego+1.0)*127.5
-        stego255=stego255.round()
-
-        save_images_dir = '/mnt/workspace/optical_stego/trainpng'
-        video_path = '/mnt/workspace/optical_stego/trainpng/output.mp4'
-        decoded_image_paths = [os.path.join(save_images_dir, f"video{i+1}.png") for i in range(3)]
-        all_images_tensor=[]
-        for i in range(stego255.shape[0]):
-            # im1=host[i,0,:,:,:]
-            # im3=host[i,2,:,:,:]
-            # im2=stego255[i,0,:,:,:].permute(1,2,0)
-            images = [host[i, 0, :, :, :], stego255[i, 0, :, :, :].permute(1, 2, 0), host[i, 2, :, :, :]]
-            for idx, image in enumerate(images, start=1):
-                utils.save_image(image, f'{save_images_dir}/im{idx}.png')
-            # 使用FFmpeg编码为H.265视频
-            ffmpeg.input(f'{save_images_dir}/im%d.png', framerate=1).output(video_path, vcodec='libx265', qp=32).run(overwrite_output=True, quiet=True)
-
-            # 使用FFmpeg解码视频回到PNG
-            ffmpeg.input(video_path).output(f'{save_images_dir}/video%d.png', start_number=1).run(overwrite_output=True,quiet=True)
-            video2_img = cv2.imread(decoded_image_paths[1])
-
-            video2_img = cv2.cvtColor(video2_img, cv2.COLOR_BGR2RGB)  # 转换颜色空间（如果需要）
-            #decoded_im2 = cv2.cvtColor(decoded_im2, cv2.COLOR_BGR2RGB)
-            video2_tensor = torch.tensor(video2_img, dtype=torch.float32).permute(2, 0, 1)  # 转换为Tensor并调整维度
-            all_images_tensor.append(video2_tensor)
-
-        final_tensor = torch.stack(all_images_tensor, dim=0).unsqueeze(1)
-        final_tensor=final_tensor.to(device)
-        final_tensor=final_tensor/ 127.5 - 1.0
-        noise_real=final_tensor-host_norm
-        noisy_stego = stego_quant  + noise_real #+ noise_guass # + noise_x265 # +host
-        #noisy_stego=quantization(noisy_stego)#测试，加上噪声后quant一次
-        #noisy_stego_image = stego_image_quant + noise_tensor
-        noisy_stego_dwt=dwt_module(noisy_stego)
-
-        rs_dwt = decoder(noisy_stego_dwt)
-        rs=iwt_module(rs_dwt)
-
-        #rs_norm=rs.sigmoid()/255.0
-        #secret_norm=secret/255.0
+        # stego_dwt=y_norm_dwt_uvnorm+res_dwt#(b,t,1,1,6,h/2,w/2),y分量是以频带形式存在的
+        # stego_y_dwt = stego_dwt[:,:,:,0:4,:,:]#提取出y分量，y分量是以频带形式存在的
+        # stego_y=iwt_module(stego_y_dwt).clamp(-1,1)#把y分量进行iwt变换后，再clamp
+        #stego_quant=quantization(stego)#64,1,1,h,w
+        
+        #这个用于进行视频编码和计算像素级别的损失
+        stego_255=((stego+1.0)*127.5).round()
         
 
+        #把第二帧替换成stego，保存为yuv，再进行编码
+        y_all[:,1,:,:]=stego_255[:,0,0,:,:]
+        u_all[:,1,:,:]=stego_255[:,0,1,:,:]
+        v_all[:,1,:,:]=stego_255[:,0,2,:,:]
+        utils.save_yuv_sequence(y_all, u_all, v_all)#保存yuv
+        #noisy_stego_image = utils.adaptive_block_division(flow_gray,stego_image)
+
+        time.sleep(1)
+        #final_yuv=stego_255
+        final_y, final_u, final_v = utils.process_batch(b, 'output', width=448, height=256,qp=27)
+        final_y=final_y.unsqueeze(1).unsqueeze(1)
+        final_u=final_u.unsqueeze(1).unsqueeze(1)
+        final_v=final_v.unsqueeze(1).unsqueeze(1)
+        final_yuv=torch.cat([final_y,final_u,final_v],dim=2)
+
+        final_yuv_norm=final_yuv/127.5 -1.0
+        final_yuv_norm_dwt=dwt_module(final_yuv_norm)
+
+        #final_y_norm_dwt=dwt_module(final_y_norm).squeeze(1)
+        #final_y_norm_dwt_uvnorm=torch.cat([final_y_norm_dwt, final_u_norm.unsqueeze(1), final_v_norm.unsqueeze(1)],dim=2).unsqueeze(1)
+
+        #noise=final_y_norm_dwt_uvnorm-stego_dwt
+        noise=(final_yuv_norm_dwt-stego_dwt).detach()
+        #stego_noise=(stego_255 +  noise).clamp(0,255)
+        #stego_noise_dwt= dwt_module(stego_noise/127.5-1.0 )
+        stego_noise_dwt = stego_dwt + noise
+        #utils.process_batch(b, 'output', width, height)
+
+        rs_dwt = decoder(stego_noise_dwt)
+        rs=iwt_module(rs_dwt)#.clamp(0,1)#要加clamp吗
+
         fnbit = loss_fn(rs, secret)
-        #msebit=mse_loss(rs.sigmoid(),secret)
-        msequant=mse_loss(stego,stego_quant)
-        mse=mse_loss(host_norm, stego)#这是归一化的数据,整张图片，进行计算mse，用这个作为loss有问题，训练集上acc很高，测试集上acc很低
-        mse_pixel=mse_loss(((host_norm+1.0)*127.5).round(), ((stego+1.0)*127.5).round())#这是转换成像素再计算，整张图片
-        mse_noisy = mse_loss(stego, noisy_stego)
-        mse_low=mse_loss(host_dwt[:,:,:,0,:,:], stego_dwt[:,:,:,0,:,:])#归一化后的图像，low频带上进行计算，用这个作为loss，测试集上正常掉点
-        mse_all=mse_loss(host_dwt, stego_dwt)  #归一化后的图像，全频带上进行计算   
-        mse_high=mse_loss(host_dwt[:,:,:,1:,:,:], stego_dwt[:,:,:,1:,:,:])                              
-        #mse_image_low=mse_loss((host_dwt[:,:,:,0,:,:]+1.0)*127.5, (stego_dwt[:,:,:,0,:,:]+1.0)*127.5)
+        #fnbit=mse_loss(rs,secret)
+        #fnbit = loss_fn(rs_dwt, secret_dwt)
+        #fnbit = mse_loss(rs_dwt, secret_dwt)
+        mse_y_low=mse_loss(stego_dwt[:,:,0,0:1,:,:], y_norm_dwt[:,:,0:1,:,:]) 
+        mse_y_high=mse_loss(stego_dwt[:,:,0,1:4,:,:], y_norm_dwt[:,:,1:4,:,:])
+
+        mse_u_low=mse_loss(stego_dwt[:,:,1,0:1,:,:], u_norm_dwt[:,:,0:1,:,:])
+        mse_u_high=mse_loss(stego_dwt[:,:,1,1:4,:,:], u_norm_dwt[:,:,1:4,:,:])
+
+        mse_v_low=mse_loss(stego_dwt[:,:,2,0:1,:,:], v_norm_dwt[:,:,0:1,:,:])
+        mse_v_high=mse_loss(stego_dwt[:,:,2,1:4,:,:], v_norm_dwt[:,:,1:4,:,:])
+
+
+        loss = fnbit + 2*mse_y_low + mse_y_high  + mse_u_low + mse_u_high + mse_v_low+mse_v_high#
+
         acc=utils.ACC(secret,rs)
+        #隐写的mse
+        mse_pixel_y=mse_loss(stego_255[:,:,0:1,:,:],y).item()
+        mse_pixel_u=mse_loss(stego_255[:,:,1:2,:,:],u).item()
+        mse_pixel_v=mse_loss(stego_255[:,:,2:3,:,:],v).item()
+        #视频编解码的mse
+        mse_video_code_y=mse_loss(stego_255[:,:,0:1,:,:],final_yuv[:,:,0:1,:,:]).item()
+        mse_video_code_u=mse_loss(stego_255[:,:,1:2,:,:],final_yuv[:,:,1:2,:,:]).item()
+        mse_video_code_v=mse_loss(stego_255[:,:,2:3,:,:],final_yuv[:,:,2:3,:,:]).item()
 
-
-        # loss = 5*fnbit + mse + mse_low 
-        loss = fnbit + 5*mse_low+5*mse_high#*10000#+ mse_image_low#- 1000*mse_low
+        #msebit=mse_loss(rs.sigmoid(),secret)
+        # msequant=mse_loss(stego,stego_quant)
+        # mse=mse_loss(host_norm, stego)#这是归一化的数据,整张图片，进行计算mse，用这个作为loss有问题，训练集上acc很高，测试集上acc很低
+        # mse_pixel=mse_loss(((host_norm+1.0)*127.5).round(), ((stego+1.0)*127.5).round())#这是转换成像素再计算，整张图片
+        # mse_noisy = mse_loss(stego, noisy_stego)
+        # mse_low=mse_loss(host_dwt[:,:,:,0,:,:], stego_dwt[:,:,:,0,:,:])#归一化后的图像，low频带上进行计算，用这个作为loss，测试集上正常掉点
+        # mse_all=mse_loss(host_dwt, stego_dwt)  #归一化后的图像，全频带上进行计算   
+        # mse_high=mse_loss(host_dwt[:,:,:,1:,:,:], stego_dwt[:,:,:,1:,:,:])                              
+        # #mse_image_low=mse_loss((host_dwt[:,:,:,0,:,:]+1.0)*127.5, (stego_dwt[:,:,:,0,:,:]+1.0)*127.5)
 
         loss.backward()
         optimizer.step()
         #utils.print_decoder_gradients(encoder)
         optimizer.zero_grad()
         
-
-        running_loss += loss.item()
-        running_mse_quant +=msequant.item()
-        running_mse += mse.item()
-        running_mse_noisy += mse_noisy.item()
-        running_fnbit += fnbit.item()
-        running_acc += acc
-        batch_count += 1
-
         # 每32个batch打印一次
         if (batch_idx + 1) % print_every_batch == 0:
-            avg_loss = running_loss / batch_count
-            avg_mse_quant = running_mse_quant / batch_count
-            avg_mse = running_mse / batch_count
-            avg_mse_noisy = running_mse_noisy / batch_count
-            avg_fnbit = running_fnbit / batch_count
-            avg_acc = running_acc / batch_count
-            
             #print(f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f}, MSE_NOISY: {avg_mse_noisy:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}')
             #log_message = f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}'
-            log_message = f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.8f}, MSE: {avg_mse:.8f}, mse_pixel:{mse_pixel:.4f}MSEquant: {avg_mse_quant:.8f}, MSE_NOISY: {avg_mse_noisy:.4f},FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}'
+            log_message = (f'Epoch{epoch + 1},Batch{batch_idx + 1}, '
+            f'L:{loss.item():.2f}, fn:{fnbit.item():.2f}, mseylow:{mse_y_low.item():.4f}, mseulow:{mse_u_low.item():.4f}, msevlow:{mse_v_low.item():.4f},'
+            f' pixel_y:{mse_pixel_y:.0f},pixel_u:{mse_pixel_u:.0f},pixel_v:{mse_pixel_v:.0f},'
+            f'video_code_y:{mse_video_code_y:.0f},video_code_u:{mse_video_code_u:.0f},video_code_v:{mse_video_code_v:.0f},'
+            f'acc: {acc:.4f}')
             utils.log_to_file(log_message)
             print(log_message)
+            pass
             #print(f'Epoch {epoch + 1}, Batch {batch_idx + 1}, Loss: {avg_loss:.4f}, MSE: {avg_mse:.4f}, FNBIT: {avg_fnbit:.4f}, Acc: {avg_acc:.4f}')
             # 重置累积值
-            running_loss = 0.0
-            running_mse_quant=0.0
-            running_mse = 0.0
-            running_mse_noisy = 0.0
-            running_fnbit = 0.0
-            running_acc = 0.0
-            batch_count = 0
+            # running_loss = 0.0
+            # running_mse_quant=0.0
+            # running_mse = 0.0
+            # running_mse_noisy = 0.0
+            # running_fnbit = 0.0
+            # running_acc = 0.0
+            # batch_count = 0
 
             #torch.cuda.empty_cache()
 
        
         
 
-save_dir = './tripdata_model_imporedEn_secRes_DenseDe_real_noisy_quant/'
+save_dir = './tripdata_model_yuv/'
 os.makedirs(save_dir, exist_ok=True)
-encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5msehigh.pth')
-decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5msehigh.pth')
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32.pth')
 
 
 torch.save(encoder.state_dict(), encoder_save_path)

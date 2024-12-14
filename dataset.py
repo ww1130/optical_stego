@@ -326,6 +326,7 @@ class Vimeo90kDatasettxtNoisyReal(Dataset):
                 img = cv2.imread(img_path)
                 if img is not None:
                     images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    #images.append(img)
                 else:
                     raise FileNotFoundError(f"Image {img_path} cannot be read.")
             else:
@@ -394,7 +395,7 @@ class Vimeo90kDatasettxtNoisytest(Dataset):
         sequence_path = self.sequences[idx]
         images = []
 
-        #print(sequence_path)
+        print(sequence_path)
 
         # 加载IM1,IM2,im3,test时，encoder im2,视频编码im1.im2,im3得到视频
         for i in range(1, 4):
@@ -402,7 +403,8 @@ class Vimeo90kDatasettxtNoisytest(Dataset):
             if os.path.exists(img_path):
                 img = cv2.imread(img_path)
                 if img is not None:
-                    images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    #images.append(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+                    images.append(img)
                 else:
                     raise FileNotFoundError(f"Image {img_path} cannot be read.")
             else:

@@ -29,7 +29,7 @@ epochs=1
 print_every_batch=1
 generate_secret_every_batch=1
 dataset = Vimeo90kDatasettxtNoisy(root_dir='/home/admin/workspace/vimeo_triplet')
-dataset = Vimeo90kDatasettxtNoisyReal(root_dir='/home/admin/workspace/vimeo_triplet')
+dataset = Vimeo90kDatasettxtNoisy(root_dir='/home/admin/workspace/vimeo_triplet')
 dataloader = DataLoader(dataset, batch_size=bs, shuffle=True,drop_last=True)
 quantization = quant.Quantization().cuda()
 # 训练过程
@@ -101,7 +101,7 @@ for epoch in range(epochs):
         noisy_stego_dwt=dwt_module(noisy_stego)
 
         rs_dwt = decoder(noisy_stego_dwt)
-        rs=iwt_module(rs_dwt)
+        rs=iwt_module(rs_dwt)#.clamp(-1,1)
 
         #rs_norm=rs.sigmoid()/255.0
         #secret_norm=secret/255.0
@@ -168,8 +168,8 @@ for epoch in range(epochs):
 
 save_dir = './tripdata_model_imporedEn_secRes_DenseDe_noisy_quant/'
 os.makedirs(save_dir, exist_ok=True)
-encoder_save_path = os.path.join(save_dir, 'encoder_model_37_5mselow_5msehigh.pth')
-decoder_save_path = os.path.join(save_dir, 'decoder_model_37_5mselow_5msehigh.pth')
+encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5msehigh.pth')
+decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5msehigh.pth')
 
 
 torch.save(encoder.state_dict(), encoder_save_path)

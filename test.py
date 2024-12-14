@@ -25,9 +25,9 @@ dataset = Vimeo90kDatasettxtNoisytest(root_dir='/home/admin/workspace/vimeo_trip
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
 # save_dir = './tripdata_model_imporedEn_secRes_DenseDe_10/'
-save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy_quant/'
+save_dir = './tripdata_model_imporedEn_secRes_DenseDe_noisy_quant/'
 #save_dir = './tripdata_model_imporedEn_secRes_DenseDe_nonoisy/'
-save_dir = './tripdata_model_imporedEn_secRes_DenseDe_real_noisy_quant/'
+# save_dir = './tripdata_model_imporedEn_secRes_DenseDe_real_noisy_quant/'
 encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mse.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model_32_10mse.pth')
 # encoder_save_path = os.path.join(save_dir, 'encoder_model_32_10mse_quantNoise.pth')
@@ -46,8 +46,8 @@ encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5mseall.pth
 decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5mseall.pth')
 encoder_save_path = os.path.join(save_dir, 'encoder_model_32_5mselow_5msehigh.pth')
 decoder_save_path = os.path.join(save_dir, 'decoder_model_32_5mselow_5msehigh.pth')
-encoder_save_path = os.path.join(save_dir, 'encoder_model_37_5mselow_5msehigh.pth')
-decoder_save_path = os.path.join(save_dir, 'decoder_model_37_5mselow_5msehigh.pth')
+# encoder_save_path = os.path.join(save_dir, 'encoder_model_37_5mselow_5msehigh.pth')
+# decoder_save_path = os.path.join(save_dir, 'decoder_model_37_5mselow_5msehigh.pth')
 
 print(encoder_save_path)
 print(decoder_save_path)
@@ -114,25 +114,36 @@ with torch.no_grad():
             decoded_image_paths = [os.path.join(save_dir, f"video{i+1}.png") for i in range(2)]
 
             #for i in range(2):
-            img_np = stego12[0, 0].permute(1, 2, 0).cpu().numpy()
-            img_np = np.round(img_np).astype(np.uint8)
-            Image.fromarray(img_np).save(stego_paths[0])
+            # img_np = stego12[0, 0].permute(1, 2, 0).cpu().numpy()
+            # img_np = np.round(img_np).astype(np.uint8)
+            # Image.fromarray(img_np).save(stego_paths[0])
 
-            img_np = stego12[0, 1].permute(1, 2, 0).cpu().numpy()#只有这一张是嵌入了信息的
-            img_np = np.round(img_np).astype(np.uint8)
-            Image.fromarray(img_np).save(stego_paths[1])
+            # img_np = stego12[0, 1].permute(1, 2, 0).cpu().numpy()#只有这一张是嵌入了信息的
+            # img_np = np.round(img_np).astype(np.uint8)
+            # Image.fromarray(img_np).save(stego_paths[1])
 
-            img_np = host123_no_norm[0,2].permute(1, 2, 0).cpu().numpy()
-            img_np = np.round(img_np).astype(np.uint8)
-            Image.fromarray(img_np).save(stego_paths[2])
+            # img_np = host123_no_norm[0,2].permute(1, 2, 0).cpu().numpy()
+            # img_np = np.round(img_np).astype(np.uint8)
+            # Image.fromarray(img_np).save(stego_paths[2])
+
+            images_rgb = [
+                stego12[0, 0].permute(1, 2, 0).cpu().numpy(),
+                stego12[0, 1].permute(1, 2, 0).cpu().numpy(),  # 只有这一张是嵌入了信息的
+                host123_no_norm[0, 2].permute(1, 2, 0).cpu().numpy()
+            ]
+
+            # 确保所有图像都是uint8类型并且值在0-255范围内
+            images_rgb = [np.round(img).astype(np.uint8) for img in images_rgb]
+
+            utils.save_yuv_sequence(images_rgb, f'{save_dir}/stego_sequence.yuv')#保存成yuv
             
             img_np=((flow_gray[0,0,0]+1.0)*127.5).cpu().numpy()#保存的光流图
             img_np = np.round(img_np).astype(np.uint8)
             Image.fromarray(img_np).save(flow_path)
 
             # Encode images into an H.265 video
-            ffmpeg.input(f'{save_dir}/stego%d.png', framerate=1).output(video_path, vcodec='libx265', qp=22).run(overwrite_output=True,quiet=True)
-            
+            ffmpeg.input(f'{save_dir}/stego%d.png', framerate=1).output(video_path, vcodec='libx265', pix_fmt='bgr24',qp=32).run(overwrite_output=True)
+            # ,quiet=True
             # Decode the video back into frames as png
             ffmpeg.input(video_path).output(f'{save_dir}/video%d.png', start_number=1).run(quiet=True)
 
