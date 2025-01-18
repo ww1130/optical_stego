@@ -264,17 +264,17 @@ class DenseEncoderNoisy(nn.Module):
             nn.BatchNorm3d(self.hidden_size),
         )
         self.conv1 = nn.Sequential(
-            self._conv3d(self.hidden_size + self.data_depth * 8, self.hidden_size),
+            self._conv3d(self.hidden_size + self.data_depth * 4, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
         self.conv2 = nn.Sequential(
-            self._conv3d(self.hidden_size*2 + self.data_depth * 8, self.hidden_size),
+            self._conv3d(self.hidden_size*2 + self.data_depth * 4, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
         self.conv3 = nn.Sequential(
-            self._conv3d(self.hidden_size * 3 + self.data_depth * 8, self.hidden_size),
+            self._conv3d(self.hidden_size * 3 + self.data_depth * 4, self.hidden_size),
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size),
         )
@@ -339,13 +339,13 @@ class DenseEncoderNoisy(nn.Module):
         x_list = [x]
 
         # Loop over the remaining layers and concatenate `secret` and `flow` to each layer
-        x = self.conv1(torch.cat(x_list + [secret] + [flow], dim=1))
+        x = self.conv1(torch.cat(x_list + [secret] , dim=1))
         x_list.append(x)
 
-        x = self.conv2(torch.cat(x_list + [secret] + [flow], dim=1))
+        x = self.conv2(torch.cat(x_list + [secret] , dim=1))
         x_list.append(x)
 
-        x = self.conv3(torch.cat(x_list + [secret] + [flow], dim=1))
+        x = self.conv3(torch.cat(x_list + [secret] , dim=1))
         x_list.append(x)
 
         x = self.conv4(torch.cat(x_list + [secret] + [flow], dim=1))
@@ -441,11 +441,11 @@ class DenseDecoderNoisy(nn.Module):
             nn.LeakyReLU(inplace=True),
             nn.BatchNorm3d(self.hidden_size)
         )
-        self.conv4 = nn.Sequential(self._conv3d(self.hidden_size * 3, 4))
+        self.conv4 = nn.Sequential(self._conv3d(self.hidden_size * 3+4, 4))
         # Store each convolutional block
         self._models = [self.conv1, self.conv2, self.conv3, self.conv4]
 
-    def forward(self, x):
+    def forward(self, x,flow):
         """
         Forward pass for DenseDecoder.
         Input shape: (B, T, C, H, W)
@@ -456,16 +456,36 @@ class DenseDecoderNoisy(nn.Module):
         x = x.reshape(b, t, c * d, h, w)
         x = x.permute(0, 2, 1, 3, 4)
 
-        # Initialize first convolution
-        x = self._models[0](x)
-        if len(self._models) > 1:
-            x_list = [x]
-            for layer in self._models[1:]:
-                # Concatenate previous outputs across channels before each layer
-                x = layer(torch.cat(x_list, dim=1))
-                x_list.append(x)
+        flow=flow.reshape(b,1,1*4,h,w)
+        flow = flow.permute(0, 2, 1, 3, 4)
 
-        # Output shape should be (B, 1, T, H, W); permute to (B, T, 1, H, W)
+        # Initialize first convolution
+        # x = self._models[0](x)
+        # if len(self._models) > 1:
+        #     x_list = [x]
+        #     for layer in self._models[1:]:
+        #         # Concatenate previous outputs across channels before each layer
+        #         x = layer(torch.cat(x_list, dim=1))
+        #         x_list.append(x)
+
+        # # Output shape should be (B, 1, T, H, W); permute to (B, T, 1, H, W)
+        # x = x.permute(0, 2, 1, 3, 4).reshape(b, t, 1, 4, h, w)
+        # return x
+
+        x_list = []
+
+        x = self.conv1(x)
+        x_list.append(x)
+
+        x = self.conv2(torch.cat(x_list  , dim=1))
+        x_list.append(x)
+
+        x = self.conv3(torch.cat(x_list  , dim=1))
+        x_list.append(x)
+
+        x = self.conv4(torch.cat(x_list  + [flow], dim=1))
+        x_list.append(x)
+
         x = x.permute(0, 2, 1, 3, 4).reshape(b, t, 1, 4, h, w)
         return x
 

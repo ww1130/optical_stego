@@ -353,7 +353,7 @@ class Vimeo90kDatasettxtNoisyReal(Dataset):
         #decoded_im2 = cv2.cvtColor(decoded_im2, cv2.COLOR_BGR2RGB)
 
         #images = images / 127.5 - 1.0###先不做归一化，因为后面要把原始的图片送入ffmpeg进行编码
-        flow_grays = flow_grays / 127.5 - 1.0
+        #flow_grays = flow_grays / 127.5 - 1.0
         #decoded_im2 = decoded_im2 / 127.5 - 1.0
 
 
@@ -361,6 +361,8 @@ class Vimeo90kDatasettxtNoisyReal(Dataset):
 
         images_tensor = torch.FloatTensor(images).to(device)
         flow_grays_tensor = torch.FloatTensor(flow_grays).to(device)
+        flow_grays_tensor=flow_grays_tensor.clamp(25,255)
+        flow_grays_tensor=flow_grays_tensor/255
         #flow_grays_tensor=flow_grays_tensor*0.1
         #decoded_im2_tensor = torch.FloatTensor(decoded_im2).to(device)
         #decoded_im2_tensor=decoded_im2_tensor.unsqueeze(0)

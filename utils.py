@@ -18,6 +18,7 @@ import torch.multiprocessing as mp
 import torch_dct as dct
 import ffmpeg
 import time
+import subprocess
 
 class DWT(nn.Module):
     def __init__(self):
@@ -424,10 +425,56 @@ def merge_frames_into_sequence(y_all, u_all, v_all, stego_y_255, stego_uv_255):
 
 
 
-def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
-    #ffmpeg.input(yuv_file, pix_fmt='yuv420p', video_size=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(overwrite_output=True, quiet=True)
-    ffmpeg.input(yuv_file, pix_fmt='yuv444p', s=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(overwrite_output=True, quiet=True)
+# def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
+#     #ffmpeg.input(yuv_file, pix_fmt='yuv420p', video_size=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(overwrite_output=True, quiet=True)
+#     ffmpeg.input(yuv_file, pix_fmt='yuv444p', s=f'{width}x{height}').output(video_path, vcodec='libx265', qp=qp).run(quiet=True)
 
+def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
+    # 构建 FFmpeg 命令
+    # ffmpeg_cmd = [
+    #     'ffmpeg', '-y',                        # 覆盖输出文件
+    #     '-pix_fmt', 'yuv444p',                 # 输入 YUV 文件的像素格式
+    #     '-s', f'{width}x{height}',             # 输入视频的分辨率
+    #     '-i', yuv_file,                        # 输入 YUV 文件
+    #     '-c:v', 'libx265',                     # 视频编码器使用 libx265
+    #     '-qp', str(qp),                        # 设置量化参数（QP）
+    #     video_path                             # 输出文件路径
+    # ]
+    # ffmpeg_cmd= [
+    #         'ffmpeg',
+    #         '-y',
+    #         '-f', 'rawvideo',
+    #         '-pix_fmt', 'yuv444p',
+    #         '-video_size', f'{width}x{height}',
+    #         '-i', yuv_file,
+    #         '-c:v', 'libx264',
+    #         '-crf', str(32),
+    #         video_path
+    # ]
+    ffmpeg_cmd= [
+            'ffmpeg',
+            '-y',
+            '-f', 'rawvideo',
+            '-pix_fmt', 'yuv444p',
+            '-video_size', f'{width}x{height}',
+            '-i', yuv_file,
+            '-c:v', 'libx264',
+            '-qp', str(qp),
+            video_path
+    ]
+    try:
+        # 调用命令并捕获错误输出
+        subprocess.run(ffmpeg_cmd, check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+        # print("FFmpeg command:")
+        # print(" ".join(ffmpeg_cmd))  # 将命令列表打印成字符串
+        #print(f"Successfully encoded {yuv_file} to {video_path}")
+    except subprocess.CalledProcessError as e:
+        # 如果命令执行失败，打印完整的命令和错误信息
+        print(f"Error occurred while encoding {yuv_file} to {video_path}")
+        print("FFmpeg command:")
+        print(" ".join(ffmpeg_cmd))  # 将命令列表打印成字符串
+        print("Error output:")
+        print(e.stderr.decode())  # 打印 FFmpeg 的标准错误输出
 
 # def encode_yuv_to_hevc(yuv_file, video_path, width=448, height=256, fps=1, qp=32):
 #     if not os.path.exists(yuv_file):
@@ -498,7 +545,7 @@ def process_batch(b, outdir, width, height, fps=1, qp=27):
 
         
         # 编码 YUV 文件为 H.265 视频
-        time.sleep(0.5)
+        #time.sleep(0.5)
         encode_yuv_to_hevc(yuv_file, mp4_path, width, height, fps, qp)
         # 解码 H.265 视频回 YUV 文件
         decode_hevc_to_yuv(mp4_path, decoded_yuv_path)
